@@ -1,9 +1,11 @@
 from test/more import *;
-
-author_testing();
-requires_capability("proc");
-
 from std/proc import Env, Proc;
+
+if ( not Env.get( "AUTHOR_TESTING", false ) ) {
+	say("ok 1 - author-only runner # SKIP requires AUTHOR_TESTING=1");
+	say("1..1");
+	Proc.exit(0);
+}
 
 let env := {
 	PATH: Env.get( "PATH", "" ),

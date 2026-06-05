@@ -17,7 +17,8 @@ The distribution contains:
 - `modules/lang/lisp/module`: installable `.zzm` wrappers for packaged
   Lisp source.
 - `scripts/lizp`: command-line Lisp runner.
-- `tests/lang/lisp`: parser, evaluator, and runner tests.
+- `tests/lang/lisp`: parser and evaluator tests.
+- `tests/runner.zzs`: author-only command-line runner test.
 
 The distribution is licensed under the Artistic License 1.0 or the GNU
 General Public License version 2. See `LICENCE`.
