@@ -1,0 +1,163 @@
+from test/more import *;
+from lang/lisp import
+	LispByteVector,
+	LispChar,
+	LispHashTable,
+	LispInputPort,
+	LispOutputPort,
+	LispPath,
+	LispRuntimeError,
+	core_env,
+	import_library,
+	lisp_error_report,
+	lisp_eval,
+	lisp_eval_all,
+	load_lisp,
+	load_library,
+	parse_program,
+	parse_sexpr,
+	parse_sexprs,
+	standard_env,
+	sym;
+from std/io import Path;
+
+is(
+	lisp_eval( parse_sexpr("(list-ref (list 4 5 6) 1)"), standard_env() ),
+	5,
+	"standard_env loads the Lisp prelude",
+);
+like(
+	exception( function () {
+		lisp_eval( parse_sexpr("(list-ref (list 4 5) 1)"), core_env() );
+	} ),
+	/Unbound symbol/,
+	"core_env omits the Lisp prelude",
+);
+
+is(
+	lisp_eval( parse_sexpr("(let loop ((n 4) (acc 1)) (if (= n 0) acc (loop (- n 1) (* acc n))))") ),
+	24,
+	"named let recurses",
+);
+is( lisp_eval( parse_sexpr("(case 'b ((a) 1) ((b c) 2) (else 3))") ), 2, "case matches datum lists" );
+is(
+	lisp_eval( parse_sexpr("(do ((i 0 (+ i 1)) (acc 0 (+ acc i))) ((= i 4) acc))") ),
+	6,
+	"do loop evaluates steps",
+);
+is( lisp_eval( parse_sexpr("(force (delay (+ 1 2)))") ), 3, "delay and force" );
+
+let data_env := standard_env();
+let char := lisp_eval( parse_sexpr("#\\newline"), data_env );
+ok( char instanceof LispChar, "character literals evaluate to LispChar" );
+is( lisp_eval( parse_sexpr("(char->string #\\space)"), data_env ), " ", "char->string" );
+ok( lisp_eval( parse_sexpr("(char? (string->char \"x\"))"), data_env ), "string->char" );
+
+let bytes := lisp_eval( parse_sexpr("(bytevector 1 2 3)"), data_env );
+ok( bytes instanceof LispByteVector, "bytevector builtin returns LispByteVector" );
+is( lisp_eval( parse_sexpr("(bytevector-u8-ref #u8(4 5 6) 1)"), data_env ), 5, "bytevector-u8-ref" );
+is(
+	lisp_eval( parse_sexpr("(bytevector->list (list->bytevector (list 7 8)))"), data_env ),
+	[ 7, 8 ],
+	"bytevector/list conversion",
+);
+
+let hash := lisp_eval( parse_sexpr("(make-hash-table)"), data_env );
+ok( hash instanceof LispHashTable, "make-hash-table returns LispHashTable" );
+is(
+	lisp_eval(
+		parse_sexpr("(begin (define h (make-hash-table)) (hash-set! h 'a 9) (hash-ref h 'a))"),
+		data_env,
+	),
+	9,
+	"hash tables store values",
+);
+
+is( lisp_eval( parse_sexpr("(string-trim \"  x  \")") ), "x", "string helpers mirror std/string" );
+is( lisp_eval( parse_sexpr("(string-join \":\" (string-split \"a,b\" \",\"))") ), "a:b", "string split and join" );
+is( lisp_eval( parse_sexpr("(sqrt 9)") ), 3, "math helpers mirror std/math" );
+
+let path := lisp_eval( parse_sexpr("(path \"demo.txt\")") );
+ok( path instanceof LispPath, "path returns LispPath" );
+let io_dir := Path.tempdir();
+let io_file := io_dir.child("io.lizp.txt");
+let io_env := standard_env();
+io_env.define_name( "io-file", io_file.to_String() );
+is(
+	lisp_eval(
+		parse_sexpr("(begin (call-with-output-file io-file (lambda (p) (display \"hello\" p))) (call-with-input-file io-file (lambda (p) (read-line p))))"),
+		io_env,
+	),
+	"hello",
+	"Scheme-style file ports read and write text",
+);
+ok( lisp_eval( parse_sexpr("(input-port? (open-input-file io-file))"), io_env ), "input-port? recognises input ports" );
+ok( lisp_eval( parse_sexpr("(output-port? (open-output-file io-file))"), io_env ), "output-port? recognises output ports" );
+
+let lib_env := core_env();
+import_library( parse_sexpr("(scheme base)"), lib_env );
+is( lisp_eval( parse_sexpr("(list-ref (list 1 2 3) 2)"), lib_env ), 3, "import_library imports scheme/base exports" );
+
+let wrapper_env := core_env();
+load_lisp( "prelude.lizp", wrapper_env );
+is(
+	lisp_eval( parse_sexpr("(list-ref (list 7 8 9) 2)"), wrapper_env ),
+	9,
+	"load_lisp falls back to packaged prelude wrapper",
+);
+
+let precedence_dir := Path.tempdir();
+precedence_dir.child("prelude.lizp").spew_utf8(
+	"(define local-prelude-marker 123)\n",
+);
+let precedence_env := core_env();
+precedence_env.add_load_path(precedence_dir);
+load_lisp( "prelude.lizp", precedence_env );
+is(
+	lisp_eval( parse_sexpr("local-prelude-marker"), precedence_env ),
+	123,
+	"filesystem Lisp source takes precedence over wrapper modules",
+);
+like(
+	exception( function () {
+		lisp_eval( parse_sexpr("(list-ref (list 1 2) 0)"), precedence_env );
+	} ),
+	/Unbound symbol/,
+	"filesystem precedence avoids loading the packaged wrapper",
+);
+
+let custom_dir := Path.tempdir();
+custom_dir.child("demo").mkdir();
+custom_dir.child("demo").child("math.lizp").spew_utf8(
+	"(define-library (demo math)\n" _
+	"  (export ten hidden-sum)\n" _
+	"  (begin\n" _
+	"    (define secret 8)\n" _
+	"    (define ten 10)\n" _
+	"    (define (hidden-sum x) (+ x secret))))\n",
+);
+let custom_env := core_env();
+custom_env.add_load_path(custom_dir);
+import_library( parse_sexpr("(only (demo math) hidden-sum)"), custom_env );
+is( lisp_eval( parse_sexpr("(hidden-sum 2)"), custom_env ), 10, "library loader resolves load paths and only imports selected exports" );
+like(
+	exception( function () {
+		lisp_eval( parse_sexpr("ten"), custom_env );
+	} ),
+	/Unbound symbol/,
+	"only import excludes other exports",
+);
+
+let diag_env := standard_env();
+let program := parse_program(
+	"(define (explode x) (missing x))\n(explode 1)\n",
+	"diag.lizp",
+);
+let diagnostic_error := exception( function () {
+	lisp_eval( program, diag_env );
+} );
+ok( diagnostic_error instanceof LispRuntimeError, "runtime failures are LispRuntimeError" );
+like( lisp_error_report(diagnostic_error), /diag\.lizp:1:22/, "diagnostic report includes source location" );
+like( lisp_error_report(diagnostic_error), /at <lambda>/, "diagnostic report includes stack frames" );
+
+done_testing();

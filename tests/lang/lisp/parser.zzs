@@ -1,0 +1,104 @@
+from test/more import *;
+from lang/lisp/parser import
+	LispByteVector,
+	LispChar,
+	LispPair,
+	LispProgram,
+	LispSyntaxError,
+	LispSymbol,
+	LispVector,
+	parse_program,
+	parse_sexpr,
+	parse_sexprs,
+	sym;
+
+let add := parse_sexpr("(+ 1 2)");
+ok( add[0] instanceof LispSymbol, "parser returns symbols as LispSymbol" );
+is( add[0].get_name(), "+", "symbol name is captured" );
+is( add[1], 1, "simple list first argument parses" );
+is( add[2], 2, "simple list second argument parses" );
+
+let atoms := parse_sexpr("(list \"hello\\nworld\" #t #f 1.5 -2)");
+is( atoms[0].get_name(), "list", "list symbol parses" );
+is( atoms[1:], [ "hello\nworld", true, false, 1.5, -2 ], "strings, booleans, and numbers parse" );
+
+let quoted := parse_sexpr("'name");
+is( quoted[0].get_name(), "quote", "quote reader macro uses quote symbol" );
+is( quoted[1].get_name(), "name", "quote reader macro wraps expression" );
+
+let qq := parse_sexpr("`(a ,b ,@c)");
+is( qq[0].get_name(), "quasiquote", "quasiquote reader macro expands" );
+is( qq[1][1][0].get_name(), "unquote", "unquote reader macro expands" );
+is( qq[1][2][0].get_name(), "unquote-splicing", "unquote-splicing reader macro expands" );
+
+is(
+	parse_sexprs("(define x 1) ; comment\n(+ x 2)").length(),
+	2,
+	"parse_sexprs reads multiple expressions and skips comments",
+);
+is(
+	parse_sexprs("(define x 1)\n=head1 Title\n\nIgnored POD.\n=cut\n(+ x 2)").length(),
+	2,
+	"parse_sexprs skips embedded POD blocks",
+);
+let pod_program := parse_program(
+	"(define x 1)\n=head1 Title\n\nIgnored POD.\n=cut\n(+ x 2)",
+	"pod.lizp",
+);
+is( pod_program.location_for( pod_program.get_exprs()[1] ).get_line(), 6, "POD skipping preserves following source line" );
+is( parse_sexpr("(= 1 1)")[0].get_name(), "=", "equals still parses as a symbol inside expressions" );
+
+let pair := parse_sexpr("(a b . c)");
+ok( pair instanceof LispPair, "dotted list parses as LispPair chain" );
+is( pair.get_car().get_name(), "a", "dotted pair first car" );
+is( pair.get_cdr().get_car().get_name(), "b", "dotted pair second car" );
+is( pair.get_cdr().get_cdr().get_name(), "c", "dotted pair tail" );
+
+like(
+	exception( function () {
+		parse_sexpr("(a b");
+	} ),
+	/Unterminated list/,
+	"unterminated list fails clearly",
+);
+
+like(
+	exception( function () {
+		parse_sexpr("(a) (b)");
+	} ),
+	/Expected one S-expression/,
+	"parse_sexpr rejects multiple expressions",
+);
+
+let vector := parse_sexpr("#(1 two \"three\")");
+ok( vector instanceof LispVector, "vector literal parses as LispVector" );
+is( vector.get_values().length(), 3, "vector length is captured" );
+is( vector.ref(1), sym("two"), "vector values are parsed" );
+
+let ch := parse_sexpr("#\\space");
+ok( ch instanceof LispChar, "character literal parses as LispChar" );
+is( ch.get_value(), " ", "named character value is captured" );
+
+let bytes := parse_sexpr("#u8(1 2 255)");
+ok( bytes instanceof LispByteVector, "bytevector literal parses as LispByteVector" );
+is( bytes.to_Array(), [ 1, 2, 255 ], "bytevector values are captured" );
+
+let syntax_error := exception( function () {
+	parse_sexpr("#u8(999)");
+} );
+like( syntax_error, /Bytevector values/, "bad bytevector values fail clearly" );
+
+let program := parse_program("(define x 1)\n(+ x 2)", "demo.lizp");
+ok( program instanceof LispProgram, "parse_program returns LispProgram" );
+is( program.get_exprs().length(), 2, "program stores expressions" );
+is( program.location_for( program.get_exprs()[1] ).get_line(), 2, "program stores line metadata" );
+is( program.location_for( program.get_exprs()[1] ).get_source_name(), "demo.lizp", "program stores source name" );
+
+try {
+	parse_sexpr("(a b");
+}
+catch ( LispSyntaxError e ) {
+	like( e{message}, /Unterminated list/, "syntax errors are typed" );
+};
+
+done_testing();

@@ -1,0 +1,114 @@
+=encoding utf8
+
+=head1 NAME
+
+lang/lisp - Parse and evaluate Lisp/Scheme-style S-expressions.
+
+=head1 SYNOPSIS
+
+  from lang/lisp import lisp_eval, load_lisp, parse_sexpr, standard_env, sym;
+
+  say( lisp_eval( [ sym("+"), 1, 2 ], standard_env() ) );
+  say( lisp_eval( parse_sexpr("(+ 1 2)") ) );
+  say( load_lisp("program.lizp") );
+
+=head1 DESCRIPTION
+
+C<lang/lisp> is a facade module that re-exports the public parser and
+evaluator APIs from C<lang/lisp/parser> and C<lang/lisp/eval>. It is the
+recommended import path for applications that want to parse and evaluate
+Lisp/Scheme-style expressions.
+
+Use C<parse_sexpr> or C<parse_sexprs> when starting from Lisp source
+text. Use C<sym(name)> and nested C<Array> values when constructing
+S-expressions directly in ZuzuScript.
+
+=head1 EXPORTS
+
+=head2 Parser Exports
+
+=over
+
+=item C<LispError>, C<LispSyntaxError>, C<LispRuntimeError>
+
+Exception classes.
+
+=item C<LispByteVector>, C<LispChar>, C<LispEOF>, C<LispPair>, C<LispProgram>, C<LispSourceLocation>, C<LispSymbol>, C<LispVector>, C<SExprReader>
+
+Parser value classes, source metadata classes, and stateful reader.
+
+=item C<is_symbol>, C<load_program>, C<load_sexprs>, C<parse_program>, C<parse_sexpr>, C<parse_sexprs>, C<sym>
+
+Parser convenience functions.
+
+=back
+
+=head2 Evaluator Exports
+
+=over
+
+=item C<LispCallback>, C<LispClosure>, C<LispEnv>, C<LispHashTable>, C<LispInputPort>, C<LispInterpreter>, C<LispLibrary>, C<LispMacro>, C<LispOutputPort>, C<LispPath>, C<LispPromise>, C<LispRegexp>, C<LispStackFrame>
+
+Evaluator classes.
+
+=item C<core_env>, C<expand>, C<import_library>, C<lisp_error_message>, C<lisp_error_report>, C<load_library>, C<load_lisp>, C<lisp_eval>, C<lisp_eval_all>, C<lisp_repr>, C<standard_env>
+
+Evaluator functions.
+
+=back
+
+=head1 COPYRIGHT AND LICENCE
+
+B<< lang/lisp >> is copyright Toby Inkster.
+
+It is free software; you may redistribute it and/or modify it under
+the terms of either the Artistic License 1.0 or the GNU General Public
+License version 2.
+
+=cut
+
+from lang/lisp/parser import
+	LispByteVector,
+	LispChar,
+	LispEOF,
+	LispError,
+	LispPair,
+	LispProgram,
+	LispRuntimeError,
+	LispSourceLocation,
+	LispSymbol,
+	LispSyntaxError,
+	LispVector,
+	SExprReader,
+	is_symbol,
+	load_program,
+	load_sexprs,
+	parse_program,
+	parse_sexpr,
+	parse_sexprs,
+	sym;
+from lang/lisp/eval import
+	LispCallback,
+	LispClosure,
+	LispEnv,
+	LispHashTable,
+	LispInputPort,
+	LispInterpreter,
+	LispLibrary,
+	LispMacro,
+	LispOutputPort,
+	LispPath,
+	LispPromise,
+	LispRegexp,
+	LispStackFrame,
+	core_env,
+	expand,
+	import_library,
+	lisp_error_message,
+	lisp_error_report,
+	load_library,
+	load_lisp,
+	lisp_eval,
+	lisp_eval_all,
+	lisp_repr,
+	standard_env;

@@ -1,0 +1,224 @@
+from test/more import *;
+from lang/lisp import
+	LispCallback,
+	LispClosure,
+	LispInterpreter,
+	LispRuntimeError,
+	LispSymbol,
+	LispVector,
+	expand,
+	lisp_repr,
+	load_lisp,
+	lisp_eval,
+	lisp_eval_all,
+	parse_sexpr,
+	parse_sexprs,
+	standard_env,
+	sym;
+from std/io import Path;
+
+let env := standard_env();
+
+is( lisp_eval( [ sym("+"), 1, 2, 3 ], env ), 6, "direct array eval calls builtins" );
+is( lisp_eval( parse_sexpr("(+ 4 5)") ), 9, "parsed source evaluates" );
+is( lisp_eval( parse_sexpr("'hello") ).get_name(), "hello", "quote returns symbols" );
+is( lisp_eval( parse_sexpr("(if #t 10 20)") ), 10, "if true branch" );
+is( lisp_eval( parse_sexpr("(if #f 10 20)") ), 20, "if false branch" );
+is( lisp_eval( parse_sexpr("(begin (define x 4) (+ x 3))"), env ), 7, "define and begin" );
+
+is(
+	lisp_eval(
+		parse_sexpr("((lambda (x) (+ x 1)) 41)"),
+		standard_env(),
+	),
+	42,
+	"lambda application",
+);
+
+is(
+	lisp_eval(
+		parse_sexpr("(let ((x 2) (y 3)) (* x y))"),
+		standard_env(),
+	),
+	6,
+	"let binds values",
+);
+
+is(
+	lisp_eval(
+		parse_sexpr("(let* ((x 2) (y (+ x 3))) y)"),
+		standard_env(),
+	),
+	5,
+	"let* binds sequentially",
+);
+
+is(
+	lisp_eval(
+		parse_sexpr("(begin (define x 1) (set! x 9) x)"),
+		standard_env(),
+	),
+	9,
+	"set! updates existing binding",
+);
+
+is( lisp_eval( parse_sexpr("(and #t 1 \"ok\")") ), "ok", "and returns final truthy value" );
+is( lisp_eval( parse_sexpr("(or #f 0 \"later\")") ), 0, "or returns first truthy value" );
+is( lisp_eval( parse_sexpr("(cond ((> 1 2) 3) ((< 1 2) 4) (else 5))") ), 4, "cond" );
+
+let qq_eval := lisp_eval(
+	parse_sexpr("`(a ,(+ 1 2) ,@(list 4 5))"),
+	standard_env(),
+);
+is( qq_eval[0].get_name(), "a", "quasiquote keeps symbols" );
+is( qq_eval[1:], [ 3, 4, 5 ], "quasiquote evaluates unquote and splicing" );
+
+is(
+	lisp_eval( parse_sexpr("(cdr (cons 1 (list 2 3)))") ),
+	[ 2, 3 ],
+	"cons and cdr on proper list",
+);
+is( lisp_eval( parse_sexpr("(length (append (list 1 2) (list 3)))") ), 3, "append and length" );
+is( lisp_eval( parse_sexpr("(null? (list))") ), true, "null? recognises empty list" );
+is( lisp_eval( parse_sexpr("(pair? (list 1))") ), true, "pair? recognises non-empty list" );
+is( lisp_eval( parse_sexpr("(not #f)") ), true, "not treats only false as false" );
+is( lisp_eval( parse_sexpr("(equal? '(a 1) '(a 1))") ), true, "equal? compares symbols by name" );
+is( lisp_eval( parse_sexpr("(symbol? 'abc)") ), true, "symbol predicate" );
+is( lisp_eval( parse_sexpr("(procedure? +)") ), true, "procedure predicate" );
+
+is(
+	lisp_eval( parse_sexpr("((lambda args (length args)) 1 2 3)") ),
+	3,
+	"lambda supports rest-only parameters",
+);
+is(
+	lisp_eval( parse_sexpr("((lambda (a b . rest) (length rest)) 1 2 3 4)") ),
+	2,
+	"lambda supports dotted rest parameters",
+);
+is(
+	lisp_eval( parse_sexpr("(begin (define (count a . rest) (length rest)) (count 1 2 3))") ),
+	2,
+	"function-style define supports dotted rest parameters",
+);
+is( lisp_eval( parse_sexpr("(apply + 1 (list 2 3))") ), 6, "apply combines fixed args and final list" );
+is( lisp_eval( parse_sexpr("(map (lambda (x) (* x 2)) (list 1 2 3))") ), [ 2, 4, 6 ], "map" );
+is( lisp_eval( parse_sexpr("(for-each (lambda (x) x) (list 1 2 3))") ), null, "for-each returns null" );
+is( lisp_eval( parse_sexpr("(filter odd? (list 1 2 3 4))") ), [ 1, 3 ], "filter" );
+is( lisp_eval( parse_sexpr("(fold-left + 0 (list 1 2 3))") ), 6, "fold-left" );
+is( lisp_eval( parse_sexpr("(fold-right cons (list) (list 1 2 3))") ), [ 1, 2, 3 ], "fold-right" );
+
+let vec := lisp_eval( parse_sexpr("(vector 1 2 3)") );
+ok( vec instanceof LispVector, "vector builtin returns LispVector" );
+is( lisp_eval( parse_sexpr("(vector-length #(1 2 3))") ), 3, "vector literal evaluates" );
+is( lisp_eval( parse_sexpr("(begin (define v (vector 1 2)) (vector-set! v 1 9) (vector-ref v 1))") ), 9, "vector-set! mutates vectors" );
+is( lisp_eval( parse_sexpr("(vector->list (list->vector (list 1 2)))") ), [ 1, 2 ], "vector/list conversion" );
+
+is( lisp_eval( parse_sexpr("(symbol->string 'hello)") ), "hello", "symbol->string" );
+is( lisp_eval( parse_sexpr("(symbol? (string->symbol \"hello\"))") ), true, "string->symbol" );
+is( lisp_eval( parse_sexpr("(string-append \"a\" \"b\" \"c\")") ), "abc", "string-append" );
+is( lisp_eval( parse_sexpr("(substring \"abcdef\" 2 3)") ), "cde", "substring" );
+is( lisp_eval( parse_sexpr("(string=? \"x\" \"x\")") ), true, "string=?" );
+is( lisp_eval( parse_sexpr("(modulo 10 4)") ), 2, "modulo" );
+is( lisp_eval( parse_sexpr("(max 1 9 3)") ), 9, "max" );
+is( lisp_eval( parse_sexpr("(min 1 -9 3)") ), -9, "min" );
+is( lisp_eval( parse_sexpr("(zero? 0)") ), true, "zero?" );
+
+is( lisp_eval( parse_sexpr("(assoc 'b (list (list 'a 1) (list 'b 2)))") ), [ sym("b"), 2 ], "assoc" );
+is( lisp_eval( parse_sexpr("(memq 'b (list 'a 'b 'c))") ), [ sym("b"), sym("c") ], "memq returns matching tail" );
+
+let callback_env := standard_env();
+let seen_callback_call := null;
+let callback := callback_env.define_callback( "foo", function ( call ) {
+	seen_callback_call := call;
+	return call.length();
+} );
+ok( callback instanceof LispCallback, "define_callback returns a callback object" );
+is( lisp_eval( parse_sexpr("(foo 1 2 3)"), callback_env ), 4, "callback receives full call list" );
+is( seen_callback_call[0].get_name(), "foo", "callback call list includes operator symbol" );
+is( seen_callback_call[1:], [ 1, 2, 3 ], "callback call list includes raw arguments" );
+is( lisp_eval( parse_sexpr("(procedure? foo)"), callback_env ), true, "callbacks are procedures" );
+
+callback_env.define_callback( "raw-name", function ( call ) {
+	return call[1].get_name();
+} );
+is(
+	lisp_eval( parse_sexpr("(raw-name missing-binding)"), callback_env ),
+	"missing-binding",
+	"callback arguments are not evaluated before callback dispatch",
+);
+
+callback_env.define_proc_callback( "sum-args", function ( args ) {
+	return args[0] + args[1];
+} );
+is( lisp_eval( parse_sexpr("(sum-args (+ 1 1) 3)"), callback_env ), 5, "proc callback receives evaluated arguments" );
+
+callback_env.define_env_callback( "env-has", function ( call, cb_env ) {
+	return cb_env.get(call[1]);
+} );
+callback_env.define_name( "host-value", 17 );
+is( lisp_eval( parse_sexpr("(env-has host-value)"), callback_env ), 17, "env callback receives current env" );
+
+is(
+	lisp_eval( parse_sexpr("(guard (e (else 42)) (error \"boom\"))") ),
+	42,
+	"guard handles LispRuntimeError",
+);
+like(
+	exception( function () {
+		lisp_eval( parse_sexpr("(error \"boom\")") );
+	} ),
+	/boom/,
+	"error raises an exception",
+);
+
+let load_dir := Path.tempdir();
+load_dir.child("helper.lizp").spew_utf8("(define helper-value 12)\n");
+load_dir.child("main.lizp").spew_utf8("(load \"helper.lizp\")\n(+ helper-value 5)\n");
+is( load_lisp( load_dir.child("main.lizp"), standard_env() ), 17, "load_lisp resolves nested loads relative to file" );
+let load_path_env := standard_env();
+load_path_env.add_load_path(load_dir);
+is( lisp_eval( parse_sexpr("(begin (load \"helper.lizp\") helper-value)"), load_path_env ), 12, "load builtin uses env load paths" );
+
+is( lisp_repr( [ sym("a"), 1, true ] ), "(a 1 #t)", "lisp_repr renders lists" );
+
+is(
+	lisp_eval_all(
+		parse_sexprs(
+			"(define fact\n" _
+			"  (lambda (n acc)\n" _
+			"    (if (= n 0) acc (fact (- n 1) (* acc n)))))\n" _
+			"(fact 8 1)"
+		),
+		standard_env(),
+	),
+	40320,
+	"tail-recursive function evaluates",
+);
+
+let macro_env := standard_env();
+lisp_eval_all(
+	parse_sexprs(
+		"(define-syntax when\n" _
+		"  (syntax-rules ()\n" _
+		"    ((when test body ...)\n" _
+		"     (if test (begin body ...)))))\n" _
+		"(define value 0)\n" _
+		"(when #t (set! value 7) (set! value (+ value 1)))"
+	),
+	macro_env,
+);
+is( lisp_eval( sym("value"), macro_env ), 8, "syntax-rules macro expands repeated body" );
+
+ok(
+	expand(
+		parse_sexpr("(when #t 1)"),
+		macro_env,
+	) instanceof Array,
+	"expand returns expanded array",
+);
+
+let interpreter := new LispInterpreter();
+is( interpreter.eval_string("(+ 10 5)"), 15, "LispInterpreter eval_string" );
+
+done_testing();

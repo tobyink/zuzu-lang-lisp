@@ -1,0 +1,133 @@
+#!/usr/bin/env zuzu
+
+from lang/lisp import
+	LispEnv,
+	core_env,
+	lisp_error_report,
+	lisp_eval,
+	lisp_repr,
+	load_lisp,
+	parse_program,
+	standard_env;
+from std/getopt import Getopt;
+from std/io import Path, STDERR, STDIN, STDOUT;
+from std/proc import Proc;
+from std/string import join, substr;
+
+function _usage () {
+	return join( "\n", [
+		"Usage: lizp [options] [file|-]",
+		"",
+		"Options:",
+		"  -e, --eval EXPR     Evaluate EXPR instead of reading a file",
+		"  -I, --include DIR   Add a Lisp load path",
+		"  --no-stdlib         Start with an empty environment",
+		"  --core-only         Start with core primitives but no prelude",
+		"  -h, --help          Show this help",
+	] ) _ "\n";
+}
+
+function _read_stdin () {
+	let chunks := [];
+	while ( true ) {
+		let line := STDIN.next_line();
+		last if line == null;
+		chunks.push(line);
+	}
+	return join( "", chunks );
+}
+
+function _preprocess_argv ( argv ) {
+	let out := [];
+	for ( let arg in argv ) {
+		let text := "" _ arg;
+		if ( length text > 2 and substr( text, 0, 2 ) eq "-I" ) {
+			out.push("-I");
+			out.push( substr( text, 2 ) );
+		}
+		else {
+			out.push(text);
+		}
+	}
+	return out;
+}
+
+function _env ( opts ) {
+	let env := opts{"no-stdlib"}
+		? new LispEnv()
+		: opts{"core-only"}
+			? core_env()
+			: standard_env();
+	if ( opts{include} instanceof Array ) {
+		for ( let path in opts{include} ) {
+			env.add_load_path(path);
+		}
+	}
+	else if ( opts{include} != null ) {
+		env.add_load_path(opts{include});
+	}
+	return env;
+}
+
+function _run ( argv ) {
+	let parsed := Getopt.parse(
+		_preprocess_argv(argv),
+		[
+			"help|h",
+			"eval|e=s",
+			"include|I=s@",
+			"no-stdlib",
+			"core-only",
+		],
+	);
+	if ( not parsed{ok} ) {
+		STDERR.say(parsed{error});
+		STDERR.print(_usage());
+		return 2;
+	}
+
+	let opts := parsed{options};
+	if ( opts{help} ) {
+		STDOUT.print(_usage());
+		return 0;
+	}
+
+	let env := _env(opts);
+	let result := null;
+
+	if ( opts.exists( "eval" ) ) {
+		if ( parsed{argv}.length() != 0 ) {
+			die "lizp: --eval does not accept a file argument";
+		}
+		let program := parse_program( "" _ opts{eval}, "-e" );
+		result := lisp_eval( program, env );
+	}
+	else if ( parsed{argv}.length() == 0 or parsed{argv}[0] eq "-" ) {
+		if ( parsed{argv}.length() > 1 ) {
+			die "lizp: expected at most one input";
+		}
+		let program := parse_program( _read_stdin(), "<stdin>" );
+		result := lisp_eval( program, env );
+	}
+	else {
+		if ( parsed{argv}.length() > 1 ) {
+			die "lizp: expected at most one input file";
+		}
+		result := load_lisp( new Path(parsed{argv}[0]), env );
+	}
+
+	STDOUT.say( lisp_repr(result) );
+	return 0;
+}
+
+function __main__ ( argv ) {
+	let status := 0;
+	try {
+		status := _run(argv);
+	}
+	catch ( Exception e ) {
+		STDERR.say(lisp_error_report(e));
+		status := 1;
+	};
+	Proc.exit(status);
+}

@@ -1,0 +1,2563 @@
+=encoding utf8
+
+=head1 NAME
+
+lang/lisp/eval - Evaluate Lisp/Scheme S-expressions.
+
+=head1 SYNOPSIS
+
+  from lang/lisp/eval import lisp_eval, lisp_eval_all, standard_env;
+  from lang/lisp/parser import parse_sexpr, sym;
+
+  let env := standard_env();
+  say( lisp_eval( parse_sexpr("(+ 1 2 3)"), env ) );  // 6
+  say( lisp_eval( [ sym("+"), 1, 2, 3 ], env ) );      // 6
+
+  env.define_callback( "raw", function ( call ) {
+      return call[1].get_name();
+  } );
+  say( lisp_eval( parse_sexpr("(raw unevaluated)"), env ) );
+
+=head1 DESCRIPTION
+
+This module evaluates the S-expression values produced by
+C<lang/lisp/parser>, or equivalent nested Zuzu arrays built by callers.
+Symbols must be C<LispSymbol> objects, normally constructed with
+C<sym(name)>.
+
+The evaluator implements a small Scheme-style language with lexical
+environments, first-class closures, host callbacks, a practical
+C<syntax-rules> macro subset, quasiquote, and trampoline-based tail
+evaluation. C<standard_env()> loads a Lisp-source prelude; C<core_env()>
+returns only native core primitives.
+
+Arguments to ordinary procedures are evaluated before dispatch. Raw
+callbacks receive the raw call list before operand evaluation; procedure
+callbacks receive evaluated operands.
+
+=head1 LANGUAGE SUPPORT
+
+The following special forms are supported:
+
+=over
+
+=item * C<quote>, C<quasiquote>, C<unquote>, and C<unquote-splicing>;
+
+=item * C<if>, C<begin>, C<cond>, C<and>, and C<or>;
+
+=item * C<define>, function-style C<define>, and C<set!>;
+
+=item * C<lambda>;
+
+=item * C<let>, named C<let>, C<let*>, C<letrec>, and C<do>;
+
+=item * C<guard> and C<error>;
+
+=item * C<case>, C<delay>, and C<force>;
+
+=item * C<define-library>, C<import>, and C<include>;
+
+=item * C<define-syntax> with a C<syntax-rules> subset.
+
+=back
+
+The standard environment includes:
+
+=over
+
+=item * arithmetic and numeric predicates:
+C<+>, C<->, C<*>, C</>, C<=>, C<< < >>, C<< > >>, C<< <= >>,
+C<< >= >>, C<zero?>, C<positive?>, C<negative?>, C<even?>, C<odd?>,
+C<modulo>, C<abs>, C<min>, and C<max>;
+
+=item * equality and predicates:
+C<eq?>, C<equal?>, C<not>, C<null?>, C<pair?>, C<list?>, C<vector?>,
+C<symbol?>, C<number?>, C<string?>, C<boolean?>, and C<procedure?>;
+
+=item * list and higher-order helpers:
+C<list>, C<cons>, C<car>, C<cdr>, C<length>, C<append>, C<apply>,
+C<map>, C<for-each>, C<filter>, C<fold-left>, and C<fold-right>;
+
+=item * vector helpers:
+C<vector>, C<vector-length>, C<vector-ref>, C<vector-set!>,
+C<list->vector>, and C<vector->list>;
+
+=item * symbol and string helpers:
+C<symbol->string>, C<string->symbol>, C<string-append>,
+C<string-length>, C<substring>, and C<string=?>;
+
+=item * association and membership helpers:
+C<assoc>, C<assq>, C<member>, and C<memq>;
+
+=item * file loading and errors:
+C<load> and C<error>.
+
+=item * characters, bytevectors, hash tables, paths, regexps, and
+Scheme-style file ports.
+
+=back
+
+=head1 CALLBACKS
+
+C<LispEnv.define_callback(name, callback)> binds a Zuzu callback into the
+environment. When Lisp code calls the name, the callback receives the raw
+call S-expression array, including the operator symbol. Arguments are not
+evaluated before callback dispatch.
+
+  let env := standard_env();
+  env.define_callback( "foo", function ( call ) {
+      return call.length();
+  } );
+
+  lisp_eval( parse_sexpr("(foo 1 2 3)"), env );  // 4
+
+The callback receives a list like:
+
+  [ sym("foo"), 1, 2, 3 ]
+
+This makes callbacks suitable for host integrations, custom special-form
+behaviour, or controlled inspection of unevaluated Lisp input.
+
+C<LispEnv.define_proc_callback(name, callback)> is for ordinary
+procedure-like host functions. Lisp evaluates operands first, then calls
+the callback with an C<Array> of argument values.
+
+C<LispEnv.define_env_callback(name, callback)> is like
+C<define_callback>, but calls the Zuzu function with both the raw call
+list and the current C<LispEnv>.
+
+=head1 LOADING
+
+C<load_lisp(target, env?)> and the Lisp C<load> builtin parse and
+evaluate Lisp files. Relative nested loads are resolved from the
+currently loading file. C<LispEnv.add_load_path(path)> adds extra search
+directories for C<load>.
+
+If a relative string target ending C<.lizp> is not found on the
+filesystem, C<load> also tries an installable Zuzu wrapper module under
+C<lang/lisp/module>. For example, C<(load "helper.lizp")> tries to
+import C<LISP_SOURCE> from C<lang/lisp/module/helper>. Wrapper modules
+are intended for packaged Lisp libraries that need to survive
+C<zuzuzoo> installation.
+
+=head1 LIBRARIES
+
+C<define-library> and C<import> provide a small R7RS-shaped library
+system. Library names such as C<(scheme base)> resolve to C<scheme/base>
+inside configured Lisp library paths, then to wrapper modules such as
+C<lang/lisp/module/scheme/base>. Import modifiers C<only>, C<except>,
+C<prefix>, and C<rename> are supported.
+
+=head1 DIAGNOSTICS
+
+Runtime failures are reported as C<LispRuntimeError> values with source
+locations and Lisp stack frames where available. Use
+C<lisp_error_report(error)> to format a human-readable report.
+
+=head1 EXPORTS
+
+=head2 Functions
+
+=over
+
+=item C<< standard_env() >>
+
+Returns a new C<LispEnv> populated with core builtins and the Lisp
+prelude. Each call returns a separate environment.
+
+=item C<< core_env() >>
+
+Returns a new C<LispEnv> populated with native core primitives only.
+
+=item C<< lisp_eval(expr, env?) >>
+
+Evaluates one S-expression. C<expr> may be parsed source output or a
+direct nested-array expression. If C<env> is omitted, a new standard
+environment is used.
+
+=item C<< lisp_eval_all(Array exprs, env?) >>
+
+Evaluates expressions from left to right and returns the final result.
+This is useful with C<parse_sexprs> when source text contains definitions
+followed by an expression.
+
+=item C<< load_lisp(target, env?) >>
+
+Loads, parses, and evaluates a Lisp file. C<target> may be a C<String> or
+C<std/io> C<Path>. If C<env> is omitted, a new standard environment is
+used. Throws when the file cannot be resolved or when a recursive load is
+detected.
+
+=item C<< load_library(name, env?) >>
+
+Loads and returns a C<LispLibrary>.
+
+=item C<< import_library(spec, env?) >>
+
+Imports a library or import modifier expression into C<env>.
+
+=item C<< expand(expr, env?) >>
+
+Expands macro calls visible in C<env> and returns the expanded
+S-expression. Non-list values are returned unchanged.
+
+=item C<< lisp_repr(value) >>
+
+Formats a Lisp value as Lisp-readable text for display. It recognises
+symbols, strings, booleans, lists, dotted pairs, and vectors.
+
+=item C<< lisp_error_message(error) >>
+
+Formats the main diagnostic message for a Lisp error.
+
+=item C<< lisp_error_report(error) >>
+
+Formats the main diagnostic plus Lisp stack frames.
+
+=back
+
+=head2 Classes
+
+=over
+
+=item C<LispEnv>
+
+Lexical environment for evaluation.
+
+=over
+
+=item C<< env.define(LispSymbol name, value) >>
+
+Binds C<value> to C<name> in the current environment and returns the
+value.
+
+=item C<< env.define_name(String name, value) >>
+
+Binds C<value> to a plain string name in the current environment and
+returns the value.
+
+=item C<< env.define_callback(String name, Function callback) >>
+
+Binds a raw host callback and returns the created C<LispCallback>.
+
+=item C<< env.define_proc_callback(String name, Function callback) >>
+
+Binds a procedure callback that receives evaluated argument values.
+
+=item C<< env.define_env_callback(String name, Function callback) >>
+
+Binds a raw callback that also receives the current C<LispEnv>.
+
+=item C<< env.get(LispSymbol name) >>
+
+Looks up C<name> through the lexical parent chain. Throws if it is
+unbound.
+
+=item C<< env.set_value(LispSymbol name, value) >>
+
+Updates an existing binding through the lexical parent chain. Throws if
+C<name> is unbound.
+
+=item C<< env.get_bindings() >>
+
+Returns the current frame's binding dictionary.
+
+=item C<< env.base_dir(value?) >>
+
+Gets or sets the base directory used while resolving nested C<load>
+calls.
+
+=item C<< env.base_module(value?) >>
+
+Gets or sets the wrapper module prefix used while resolving nested
+C<load> calls from packaged Lisp source.
+
+=item C<< env.load_stack() >>
+
+Returns the load stack used for recursive-load detection.
+
+=item C<< env.load_paths() >>
+
+Returns the mutable array of configured load paths.
+
+=item C<< env.add_load_path(path) >>
+
+Adds a C<String> or C<Path> load path and returns C<env>.
+
+=back
+
+=item C<LispCallback>
+
+Host callback wrapper created by the callback definition methods.
+
+=over
+
+=item C<< callback.get_name() >>
+
+Returns the callback binding name.
+
+=item C<< callback.get_callback() >>
+
+Returns the wrapped Zuzu function.
+
+=item C<< callback.get_kind() >>
+
+Returns C<raw>, C<proc>, or C<env>.
+
+=item C<< callback.call_raw(Array expr, env) >>
+
+Calls a raw or environment callback with the raw S-expression call list.
+
+=item C<< callback.call_args(Array args) >>
+
+Calls a procedure callback with evaluated argument values.
+
+=back
+
+=item C<LispClosure>
+
+Callable Lisp closure created by C<lambda> or function-style C<define>.
+It retains its parameter list, body, and lexical environment. Methods
+C<params()>, C<body()>, and C<env()> return those values.
+
+=item C<LispMacro>
+
+Macro object created by C<define-syntax>. The supported C<syntax-rules>
+subset recognises literal identifiers, C<_> wildcard patterns, and
+C<...> repetition in list patterns and templates.
+
+Methods C<name()>, C<set_name(value)>, C<literals()>, and C<rules()>
+expose the macro metadata.
+
+=item C<LispLibrary>, C<LispStackFrame>, C<LispPromise>
+
+Library, diagnostic stack-frame, and delayed-expression values.
+
+=item C<LispHashTable>, C<LispPath>, C<LispRegexp>
+
+Host-backed data wrappers exposed to Lisp code.
+
+=item C<LispInputPort>, C<LispOutputPort>
+
+Scheme-style text input and output ports.
+
+=item C<LispInterpreter>
+
+Small stateful wrapper around an environment.
+
+=over
+
+=item C<< interpreter.get_env() >>
+
+Returns the interpreter environment.
+
+=item C<< interpreter.eval(expr) >>
+
+Evaluates one already-parsed or direct S-expression in the interpreter
+environment.
+
+=item C<< interpreter.eval_string(String source) >>
+
+Parses one S-expression from C<source> and evaluates it in the
+interpreter environment.
+
+=back
+
+=back
+
+=head1 LIMITATIONS
+
+The macro system is a useful C<syntax-rules> subset, not a complete
+Scheme standard implementation. It does not provide full hygiene,
+C<syntax-case>, phase separation, or a complete report-level library
+system.
+
+=head1 COPYRIGHT AND LICENCE
+
+B<< lang/lisp/eval >> is copyright Toby Inkster.
+
+It is free software; you may redistribute it and/or modify it under
+the terms of either the Artistic License 1.0 or the GNU General Public
+License version 2.
+
+=cut
+
+from lang/lisp/parser import
+	LispByteVector,
+	LispChar,
+	LispEOF,
+	LispPair,
+	LispProgram,
+	LispRuntimeError,
+	LispSourceLocation,
+	LispSymbol,
+	LispVector,
+	SExprReader,
+	is_symbol,
+	parse_program,
+	parse_sexpr,
+	parse_sexprs,
+	sym;
+from std/eval import eval as _zuzu_eval;
+from std/io import Path, STDERR, STDIN, STDOUT;
+from std/math import Math, π;
+from std/string import
+	chomp,
+	contains,
+	ends_with,
+	index,
+	join,
+	matches,
+	replace,
+	search,
+	split,
+	starts_with,
+	substr,
+	trim;
+
+function core_env;
+function expand;
+function import_library;
+function lisp_eval;
+function lisp_eval_all;
+function lisp_error_message;
+function lisp_error_report;
+function lisp_repr;
+function load_library;
+function load_lisp;
+function standard_env;
+function _copy_stack;
+function _eval_lisp_source;
+function _lisp_equal;
+function _match;
+function _wrapped_lisp_source;
+
+class LispCallback {
+	let String name with get := "";
+	let String kind with get := "raw";
+	let callback with get := null;
+
+	method call_raw ( Array expr, env ) {
+		if ( kind eq "env" ) {
+			return callback( expr, env );
+		}
+		return callback(expr);
+	}
+
+	method call_args ( Array args ) {
+		return callback(args);
+	}
+}
+
+class LispEnv {
+	let parent := null;
+	let Dict bindings with get := {};
+
+	method __build__ () {
+		bindings := {} if bindings == null;
+	}
+
+	method define ( LispSymbol name, value ) {
+		bindings.set( name.get_name(), value );
+		return value;
+	}
+
+	method define_name ( String name, value ) {
+		bindings.set( name, value );
+		return value;
+	}
+
+	method define_callback ( String name, Function callback ) {
+		return self.define_name(
+			name,
+			new LispCallback( name: name, kind: "raw", callback: callback ),
+		);
+	}
+
+	method define_proc_callback ( String name, Function callback ) {
+		return self.define_name(
+			name,
+			new LispCallback( name: name, kind: "proc", callback: callback ),
+		);
+	}
+
+	method define_env_callback ( String name, Function callback ) {
+		return self.define_name(
+			name,
+			new LispCallback( name: name, kind: "env", callback: callback ),
+		);
+	}
+
+	method find ( LispSymbol name ) {
+		return self if bindings.exists(name.get_name());
+		return parent.find(name) if parent != null;
+		die "Unbound symbol: " _ name.get_name();
+	}
+
+	method get ( LispSymbol name ) {
+		return self.find(name).get_bindings().get(name.get_name());
+	}
+
+	method set_value ( LispSymbol name, value ) {
+		self.find(name).get_bindings().set( name.get_name(), value );
+		return value;
+	}
+
+	method root () {
+		return parent == null ? self : parent.root();
+	}
+
+	method base_dir ( value? ) {
+		let root := self.root();
+		if ( value != null ) {
+			root.get_bindings().set( "__load_base_dir", value );
+		}
+		return root.get_bindings().get( "__load_base_dir", null );
+	}
+
+	method clear_base_dir () {
+		self.root().get_bindings().remove("__load_base_dir");
+		return self;
+	}
+
+	method base_module ( String value? ) {
+		let root := self.root();
+		if ( value != null ) {
+			root.get_bindings().set( "__load_base_module", value );
+		}
+		return root.get_bindings().get( "__load_base_module", "" );
+	}
+
+	method clear_base_module () {
+		self.root().get_bindings().remove("__load_base_module");
+		return self;
+	}
+
+	method load_stack () {
+		if ( not bindings.exists("__load_stack") ) {
+			bindings.set( "__load_stack", [] );
+		}
+		return bindings.get("__load_stack");
+	}
+
+	method load_paths () {
+		if ( not bindings.exists("__load_paths") ) {
+			bindings.set( "__load_paths", [] );
+		}
+		return bindings.get("__load_paths");
+	}
+
+	method add_load_path ( path ) {
+		self.load_paths().push( path instanceof Path ? path : new Path( "" _ path ) );
+		return self;
+	}
+
+	method libraries () {
+		let root := self.root();
+		if ( not root.get_bindings().exists("__libraries") ) {
+			root.get_bindings().set( "__libraries", {} );
+		}
+		return root.get_bindings().get("__libraries");
+	}
+
+	method library_stack () {
+		let root := self.root();
+		if ( not root.get_bindings().exists("__library_stack") ) {
+			root.get_bindings().set( "__library_stack", [] );
+		}
+		return root.get_bindings().get("__library_stack");
+	}
+
+	method program_stack () {
+		let root := self.root();
+		if ( not root.get_bindings().exists("__program_stack") ) {
+			root.get_bindings().set( "__program_stack", [] );
+		}
+		return root.get_bindings().get("__program_stack");
+	}
+
+	method call_stack () {
+		let root := self.root();
+		if ( not root.get_bindings().exists("__call_stack") ) {
+			root.get_bindings().set( "__call_stack", [] );
+		}
+		return root.get_bindings().get("__call_stack");
+	}
+
+	method current_program () {
+		let stack := self.program_stack();
+		return null if stack.length() == 0;
+		return stack[ stack.length() - 1 ];
+	}
+
+	method current_input_port ( value? ) {
+		let root := self.root();
+		if ( value != null ) {
+			root.get_bindings().set( "__current_input_port", value );
+		}
+		return root.get_bindings().get("__current_input_port");
+	}
+
+	method current_output_port ( value? ) {
+		let root := self.root();
+		if ( value != null ) {
+			root.get_bindings().set( "__current_output_port", value );
+		}
+		return root.get_bindings().get("__current_output_port");
+	}
+
+	method current_error_port ( value? ) {
+		let root := self.root();
+		if ( value != null ) {
+			root.get_bindings().set( "__current_error_port", value );
+		}
+		return root.get_bindings().get("__current_error_port");
+	}
+}
+
+class LispClosure {
+	let params with get := [];
+	let Array body with get := [];
+	let env with get := null;
+}
+
+class LispMacro {
+	let name with get := null;
+	let Array literals with get := [];
+	let Array rules with get := [];
+
+	method set_name ( value ) {
+		name := value;
+		return self;
+	}
+
+}
+
+class LispStackFrame {
+	let name with get := null;
+	let location with get := null;
+
+	method to_String () {
+		return ( location != null ? location.to_String() _ ": " : "" ) _
+			( name != null ? "" _ name : "<expr>" );
+	}
+}
+
+class LispLibrary {
+	let String name with get := "";
+	let Array exports with get := [];
+	let env with get := null;
+
+	method __build__ () {
+		exports := [] if exports == null;
+	}
+
+}
+
+class LispPromise {
+	let expr := null;
+	let env := null;
+	let Boolean forced := false;
+	let value := null;
+
+	method force () {
+		if ( not forced ) {
+			value := lisp_eval( expr, env );
+			forced := true;
+		}
+		return value;
+	}
+}
+
+class LispHashTable {
+	let String mode with get := "equal";
+	let Array entries with get := [];
+
+	method __build__ () {
+		entries := [] if entries == null;
+	}
+
+	method _key_equal ( left, right ) {
+		return mode eq "eq" ? left == right : _lisp_equal( left, right );
+	}
+
+	method exists ( key ) {
+		for ( let entry in entries ) {
+			return true if self._key_equal( entry{key}, key );
+		}
+		return false;
+	}
+
+	method ref ( key, fallback? ) {
+		for ( let entry in entries ) {
+			return entry{value} if self._key_equal( entry{key}, key );
+		}
+		return fallback;
+	}
+
+	method set_value ( key, value ) {
+		for ( let entry in entries ) {
+			if ( self._key_equal( entry{key}, key ) ) {
+				entry{value} := value;
+				return value;
+			}
+		}
+		entries.push({ key: key, value: value });
+		return value;
+	}
+
+	method delete ( key ) {
+		let out := [];
+		let deleted := false;
+		for ( let entry in entries ) {
+			if ( self._key_equal( entry{key}, key ) ) {
+				deleted := true;
+			}
+			else {
+				out.push(entry);
+			}
+		}
+		entries := out;
+		return deleted;
+	}
+
+	method keys () {
+		let out := [];
+		for ( let entry in entries ) {
+			out.push(entry{key});
+		}
+		return out;
+	}
+
+	method values () {
+		let out := [];
+		for ( let entry in entries ) {
+			out.push(entry{value});
+		}
+		return out;
+	}
+}
+
+class LispPath {
+	let path with get := null;
+
+	method __build__ () {
+		path := new Path("") if path == null;
+		path := new Path("" _ path) unless path instanceof Path;
+	}
+
+	method to_String () {
+		return path.to_String();
+	}
+}
+
+class LispRegexp {
+	let String pattern with get := "";
+	let String flags with get := "";
+}
+
+class LispInputPort {
+	let source := null;
+	let reader := null;
+	let Array lines := [];
+	let Number line_index := 0;
+	let Number char_index := 0;
+	let Boolean closed with get := false;
+	let String source_name := "<port>";
+
+	method __build__ () {
+		source := "" if source == null;
+		reader := new SExprReader( source: source, source_name: source_name )
+			if reader == null;
+		lines := split( source, "\n" ) if lines.length() == 0;
+	}
+
+	method read () {
+		return new LispEOF() if closed or reader.eof();
+		return reader.read_expr();
+	}
+
+	method read_line () {
+		return new LispEOF() if closed or line_index >= lines.length();
+		let line := lines[line_index];
+		line_index++;
+		return line;
+	}
+
+	method read_char () {
+		return new LispEOF() if closed or char_index >= length source;
+		let ch := substr( source, char_index, 1 );
+		char_index++;
+		return new LispChar( value: ch );
+	}
+
+	method peek_char () {
+		return new LispEOF() if closed or char_index >= length source;
+		return new LispChar( value: substr( source, char_index, 1 ) );
+	}
+
+	method close () {
+		closed := true;
+		return null;
+	}
+
+}
+
+class LispOutputPort {
+	let target := null;
+	let Boolean append := true;
+	let Boolean closed with get := false;
+
+	method __build__ () {
+		if ( target instanceof Path and not append ) {
+			target.spew_utf8("");
+			append := true;
+		}
+	}
+
+	method write_text ( String text ) {
+		die "output port is closed" if closed;
+		if ( target == null or target eq "stdout" ) {
+			STDOUT.print(text);
+		}
+		else if ( target eq "stderr" ) {
+			STDERR.print(text);
+		}
+		else if ( target instanceof Path ) {
+			target.append_utf8(text);
+		}
+		else {
+			die "unknown output port target";
+		}
+		return null;
+	}
+
+	method close () {
+		closed := true;
+		return null;
+	}
+
+}
+
+class _Builtin {
+	let name with get := "";
+}
+
+class _TailCall {
+	let expr with get := null;
+	let env with get := null;
+	let Array stack with get := [];
+
+	method __build__ () {
+		stack := [] if stack == null;
+	}
+
+}
+
+function _builtin ( String name ) {
+	return new _Builtin( name: name );
+}
+
+function _tail ( expr, env ) {
+	return new _TailCall( expr: expr, env: env, stack: _copy_stack(env) );
+}
+
+function _location_for ( expr, env ) {
+	let program := env.current_program();
+	return null if program == null;
+	return program.location_for(expr);
+}
+
+function _copy_stack ( env ) {
+	let out := [];
+	for ( let frame in env.call_stack() ) {
+		out.push(frame);
+	}
+	return out;
+}
+
+function _runtime_exception ( String message, expr?, env? ) {
+	let location := ( expr != null and env != null ) ? _location_for( expr, env ) : null;
+	let stack := env != null ? _copy_stack(env) : [];
+	throw new LispRuntimeError(
+		message: message,
+		location: location,
+		stack: stack,
+	);
+}
+
+function _wrap_runtime_error ( Exception e, expr, env ) {
+	if ( e instanceof LispRuntimeError ) {
+		if ( e.get_location() != null ) {
+			return e;
+		}
+		return new LispRuntimeError(
+			message: e{message},
+			location: _location_for( expr, env ),
+			stack: _copy_stack(env),
+			cause: e,
+		);
+	}
+	return new LispRuntimeError(
+		message: e{message},
+		location: _location_for( expr, env ),
+		stack: _copy_stack(env),
+		cause: e,
+	);
+}
+
+function _symbol_name ( value ) {
+	_runtime_exception("Expected symbol") unless value instanceof LispSymbol;
+	return value.get_name();
+}
+
+function _same_symbol ( value, String name ) {
+	return value instanceof LispSymbol and value.get_name() eq name;
+}
+
+function _truthy ( value ) {
+	return false if value == false or value == null;
+	return true;
+}
+
+function _copy_array ( Array values ) {
+	let out := [];
+	for ( let value in values ) {
+		out.push(value);
+	}
+	return out;
+}
+
+function _name_list_key ( name ) {
+	if ( typeof name == "String" ) {
+		return name;
+	}
+	if ( name instanceof LispSymbol ) {
+		return name.get_name();
+	}
+	if ( name instanceof Array ) {
+		let parts := [];
+		for ( let part in name ) {
+			parts.push( _symbol_name(part) );
+		}
+		return join( "/", parts );
+	}
+	_runtime_exception("Expected library name");
+}
+
+function _name_list_display ( name ) {
+	if ( typeof name == "String" ) {
+		return name;
+	}
+	if ( name instanceof Array ) {
+		let parts := [];
+		for ( let part in name ) {
+			parts.push( _symbol_name(part) );
+		}
+		return "(" _ join( " ", parts ) _ ")";
+	}
+	return "" _ name;
+}
+
+function _symbol_names ( Array values ) {
+	let out := [];
+	for ( let value in values ) {
+		out.push( _symbol_name(value) );
+	}
+	return out;
+}
+
+function _path_value ( value, String name := "path" ) {
+	if ( value instanceof LispPath ) {
+		return value.get_path();
+	}
+	return value instanceof Path ? value : new Path( "" _ value );
+}
+
+function _list_copy ( value, String name := "list" ) {
+	die name _ " expects a list" unless value instanceof Array;
+	let out := [];
+	for ( let item in value ) {
+		out.push(item);
+	}
+	return out;
+}
+
+function _child_env ( env ) {
+	return new LispEnv( parent: env );
+}
+
+function _eval_sequence ( Array body, env, Boolean tail_position ) {
+	let i := 0;
+	while ( i < body.length() ) {
+		if ( tail_position and i == body.length() - 1 ) {
+			return _tail( body[i], env );
+		}
+		lisp_eval( body[i], env );
+		i++;
+	}
+	return null;
+}
+
+function _eval_list_values ( Array values, env ) {
+	let out := [];
+	for ( let value in values ) {
+		out.push( lisp_eval( value, env ) );
+	}
+	return out;
+}
+
+function _pair_param_parts ( LispPair params ) {
+	let fixed := [];
+	let tail := params;
+	while ( tail instanceof LispPair ) {
+		fixed.push( tail.get_car() );
+		tail := tail.get_cdr();
+	}
+	return { fixed: fixed, rest: tail };
+}
+
+function _bind_params ( params, Array args, env ) {
+	let child := _child_env(env);
+	if ( params instanceof LispSymbol ) {
+		child.define( params, args );
+		return child;
+	}
+	if ( params instanceof LispPair ) {
+		let parts := _pair_param_parts(params);
+		let fixed := parts{fixed};
+		let rest := parts{rest};
+		die "Wrong argument count" if args.length() < fixed.length();
+		let i := 0;
+		while ( i < fixed.length() ) {
+			child.define( fixed[i], args[i] );
+			i++;
+		}
+		let rest_values := [];
+		while ( i < args.length() ) {
+			rest_values.push(args[i]);
+			i++;
+		}
+		child.define( rest, rest_values ) if rest instanceof LispSymbol;
+		return child;
+	}
+	die "Parameter list must be a list or symbol" unless params instanceof Array;
+	die "Wrong argument count" if params.length() != args.length();
+	let i := 0;
+	while ( i < params.length() ) {
+		child.define( params[i], args[i] );
+		i++;
+	}
+	return child;
+}
+
+function _call_closure ( LispClosure closure, Array args ) {
+	let child := _bind_params( closure.get_params(), args, closure.get_env() );
+	return _eval_sequence( closure.get_body(), child, true );
+}
+
+function _numeric_fold ( Array args, String op ) {
+	die op _ " expects at least one argument" if args.length() == 0;
+	let out := args[0] + 0;
+	if ( op eq "-" and args.length() == 1 ) {
+		return -out;
+	}
+	let i := 1;
+	while ( i < args.length() ) {
+		if ( op eq "+" ) { out += args[i]; }
+		else if ( op eq "-" ) { out -= args[i]; }
+		else if ( op eq "*" ) { out *= args[i]; }
+		else if ( op eq "/" ) { out /= args[i]; }
+		i++;
+	}
+	return out;
+}
+
+function _compare_chain ( Array args, String op ) {
+	return true if args.length() < 2;
+	let i := 1;
+	while ( i < args.length() ) {
+		let a := args[i - 1];
+		let b := args[i];
+		let ok :=
+			op eq "="  ? a == b :
+			op eq "<"  ? a < b :
+			op eq ">"  ? a > b :
+			op eq "<=" ? a <= b :
+			op eq ">=" ? a >= b :
+			false;
+		return false unless ok;
+		i++;
+	}
+	return true;
+}
+
+function _lisp_equal ( left, right ) {
+	if ( left instanceof LispSymbol or right instanceof LispSymbol ) {
+		return left instanceof LispSymbol and right instanceof LispSymbol and
+			left.get_name() eq right.get_name();
+	}
+	if ( left instanceof Array or right instanceof Array ) {
+		return false unless left instanceof Array and right instanceof Array;
+		return false unless left.length() == right.length();
+		let i := 0;
+		while ( i < left.length() ) {
+			return false unless _lisp_equal( left[i], right[i] );
+			i++;
+		}
+		return true;
+	}
+	if ( left instanceof LispPair or right instanceof LispPair ) {
+		return false unless left instanceof LispPair and right instanceof LispPair;
+		return _lisp_equal( left.get_car(), right.get_car() ) and
+			_lisp_equal( left.get_cdr(), right.get_cdr() );
+	}
+	if ( left instanceof LispVector or right instanceof LispVector ) {
+		return false unless left instanceof LispVector and right instanceof LispVector;
+		return _lisp_equal( left.get_values(), right.get_values() );
+	}
+	if ( left instanceof LispByteVector or right instanceof LispByteVector ) {
+		return false unless left instanceof LispByteVector and right instanceof LispByteVector;
+		return _lisp_equal( left.get_values(), right.get_values() );
+	}
+	if ( left instanceof LispChar or right instanceof LispChar ) {
+		return false unless left instanceof LispChar and right instanceof LispChar;
+		return left.get_value() eq right.get_value();
+	}
+	if ( left instanceof LispEOF or right instanceof LispEOF ) {
+		return left instanceof LispEOF and right instanceof LispEOF;
+	}
+	if ( left instanceof LispPath or right instanceof LispPath ) {
+		return false unless left instanceof LispPath and right instanceof LispPath;
+		return left.to_String() eq right.to_String();
+	}
+	if ( left instanceof LispRegexp or right instanceof LispRegexp ) {
+		return false unless left instanceof LispRegexp and right instanceof LispRegexp;
+		return left.get_pattern() eq right.get_pattern() and left.get_flags() eq right.get_flags();
+	}
+	return left == right;
+}
+
+function _resolve_result ( result ) {
+	if ( result instanceof _TailCall ) {
+		return lisp_eval( result.get_expr(), result.get_env() );
+	}
+	return result;
+}
+
+function _append ( Array args ) {
+	let out := [];
+	for ( let list in args ) {
+		die "append expects lists" unless list instanceof Array;
+		for ( let item in list ) {
+			out.push(item);
+		}
+	}
+	return out;
+}
+
+function _apply_proc;
+
+function _apply_to_list ( proc, Array args, env ) {
+	return _resolve_result( _apply_proc( proc, args, env ) );
+}
+
+function _map_lists ( Array args, env, Boolean keep_results ) {
+	die "map expects a procedure and at least one list" if args.length() < 2;
+	let proc := args[0];
+	let lists := args[1:];
+	for ( let list in lists ) {
+		die "map expects list arguments" unless list instanceof Array;
+	}
+	let out := [];
+	let idx := 0;
+	while ( true ) {
+		let row := [];
+		for ( let list in lists ) {
+			return keep_results ? out : null if idx >= list.length();
+			row.push(list[idx]);
+		}
+		let result := _apply_to_list( proc, row, env );
+		out.push(result) if keep_results;
+		idx++;
+	}
+	return keep_results ? out : null;
+}
+
+function _filter_list ( Array args, env ) {
+	die "filter expects a procedure and list" if args.length() != 2;
+	let proc := args[0];
+	let list := _list_copy( args[1], "filter" );
+	let out := [];
+	for ( let item in list ) {
+		if ( _truthy( _apply_to_list( proc, [ item ], env ) ) ) {
+			out.push(item);
+		}
+	}
+	return out;
+}
+
+function _fold_left ( Array args, env ) {
+	die "fold-left expects procedure, seed, and list" if args.length() != 3;
+	let acc := args[1];
+	for ( let item in _list_copy( args[2], "fold-left" ) ) {
+		acc := _apply_to_list( args[0], [ acc, item ], env );
+	}
+	return acc;
+}
+
+function _fold_right ( Array args, env ) {
+	die "fold-right expects procedure, seed, and list" if args.length() != 3;
+	let list := _list_copy( args[2], "fold-right" );
+	let acc := args[1];
+	let i := list.length() - 1;
+	while ( i >= 0 ) {
+		acc := _apply_to_list( args[0], [ list[i], acc ], env );
+		i--;
+	}
+	return acc;
+}
+
+function _member ( Array args, Boolean by_identity ) {
+	die "member expects value and list" if args.length() != 2;
+	let value := args[0];
+	let list := _list_copy( args[1], "member" );
+	let i := 0;
+	while ( i < list.length() ) {
+		let item := list[i];
+		if ( by_identity ? item == value : _lisp_equal( item, value ) ) {
+			return list[i:];
+		}
+		i++;
+	}
+	return false;
+}
+
+function _assoc ( Array args, Boolean by_identity ) {
+	die "assoc expects key and alist" if args.length() != 2;
+	let key := args[0];
+	for ( let pair in _list_copy( args[1], "assoc" ) ) {
+		next unless pair instanceof Array and pair.length() > 0;
+		if ( by_identity ? pair[0] == key : _lisp_equal( pair[0], key ) ) {
+			return pair;
+		}
+	}
+	return false;
+}
+
+function _string_append ( Array args ) {
+	let out := "";
+	for ( let item in args ) {
+		out _= "" _ item;
+	}
+	return out;
+}
+
+function _display_text ( value ) {
+	if ( value instanceof LispChar ) {
+		return value.get_value();
+	}
+	if ( typeof value == "String" ) {
+		return value;
+	}
+	return lisp_repr(value);
+}
+
+function _output_port ( args, env ) {
+	if ( args.length() > 1 ) {
+		_runtime_exception("expected at most one output port");
+	}
+	return args.length() == 0 ? env.current_output_port() : args[0];
+}
+
+function _input_port ( args, env ) {
+	if ( args.length() > 1 ) {
+		_runtime_exception("expected at most one input port");
+	}
+	return args.length() == 0 ? env.current_input_port() : args[0];
+}
+
+function _require_input_port ( value ) {
+	_runtime_exception("expected input port") unless value instanceof LispInputPort;
+	return value;
+}
+
+function _require_output_port ( value ) {
+	_runtime_exception("expected output port") unless value instanceof LispOutputPort;
+	return value;
+}
+
+function _make_input_file_port ( value ) {
+	let path := _path_value(value);
+	return new LispInputPort(
+		source: path.slurp_utf8(),
+		source_name: path.to_String(),
+	);
+}
+
+function _make_output_file_port ( value, Boolean append ) {
+	return new LispOutputPort( target: _path_value(value), append: append );
+}
+
+function _byte_values ( value, String name ) {
+	_runtime_exception( name _ " expects a bytevector" )
+		unless value instanceof LispByteVector;
+	return value.get_values();
+}
+
+function _char_value ( value, String name ) {
+	_runtime_exception( name _ " expects a character" )
+		unless value instanceof LispChar;
+	return value.get_value();
+}
+
+function _make_apply_args ( Array args ) {
+	die "apply expects at least a procedure and list" if args.length() < 2;
+	let out := [];
+	let i := 1;
+	while ( i < args.length() - 1 ) {
+		out.push(args[i]);
+		i++;
+	}
+	for ( let item in _list_copy( args[ args.length() - 1 ], "apply" ) ) {
+		out.push(item);
+	}
+	return out;
+}
+
+function _vector_values ( value, String name ) {
+	die name _ " expects a vector" unless value instanceof LispVector;
+	return value.get_values();
+}
+
+function _runtime_error ( String message ) {
+	_runtime_exception(message);
+}
+
+function _apply_builtin ( String name, Array args, env ) {
+	switch ( name : eq ) {
+		case "+", "-", "*", "/": return _numeric_fold( args, name );
+		case "=", "<", ">", "<=", ">=": return _compare_chain( args, name );
+		case "zero?": return args[0] == 0;
+		case "positive?": return args[0] > 0;
+		case "negative?": return args[0] < 0;
+		case "even?": return (args[0] mod 2) == 0 ? true : false;
+		case "odd?": return (args[0] mod 2) == 0 ? false : true;
+		case "modulo": return args[0] mod args[1];
+		case "abs": return abs(args[0]);
+		case "min": return args.sortnum()[0];
+		case "max": return args.sortnum()[ args.length() - 1 ];
+		case "random": return args.length() > 0 ? Math.rand(args[0]) : Math.rand();
+		case "exp": return Math.exp(args[0]);
+		case "log": return Math.log(args[0]);
+		case "log10": return Math.log10(args[0]);
+		case "expt": return Math.pow( args[0], args[1] );
+		case "sqrt": return Math.pow( args[0], 0.5 );
+		case "sin": return Math.sin(args[0]);
+		case "cos": return Math.cos(args[0]);
+		case "tan": return Math.tan(args[0]);
+		case "asin": return Math.asin(args[0]);
+		case "acos": return Math.acos(args[0]);
+		case "atan": return args.length() == 1 ? Math.atan(args[0]) : Math.atan2( args[0], args[1] );
+		case "pi": return π;
+
+		case "eq?": return args.length() == 2 and args[0] == args[1];
+		case "equal?": return args.length() == 2 and _lisp_equal( args[0], args[1] );
+		case "not": return args[0] == false;
+		case "null?": return args.length() == 1 and args[0] instanceof Array and args[0].length() == 0;
+		case "pair?": return args.length() == 1 and (
+			args[0] instanceof LispPair or
+			( args[0] instanceof Array and args[0].length() > 0 )
+		);
+		case "list?": return args[0] instanceof Array;
+		case "vector?": return args[0] instanceof LispVector;
+		case "bytevector?": return args[0] instanceof LispByteVector;
+		case "hash-table?": return args[0] instanceof LispHashTable;
+		case "char?": return args[0] instanceof LispChar;
+		case "path?": return args[0] instanceof LispPath;
+		case "regexp?": return args[0] instanceof LispRegexp;
+		case "input-port?": return args[0] instanceof LispInputPort;
+		case "output-port?": return args[0] instanceof LispOutputPort;
+		case "eof-object?": return args[0] instanceof LispEOF;
+		case "symbol?": return args[0] instanceof LispSymbol;
+		case "number?": return typeof args[0] == "Number";
+		case "string?": return typeof args[0] == "String";
+		case "boolean?": return typeof args[0] == "Boolean";
+		case "procedure?": return args[0] instanceof LispClosure or
+			args[0] instanceof _Builtin or args[0] instanceof LispCallback;
+
+		case "list": return args;
+		case "cons": {
+			die "cons expects two arguments" if args.length() != 2;
+			if ( args[1] instanceof Array ) {
+				let out := [ args[0] ];
+				for ( let item in args[1] ) {
+					out.push(item);
+				}
+				return out;
+			}
+			return new LispPair( car: args[0], cdr: args[1] );
+		}
+		case "car": {
+			if ( args[0] instanceof Array ) {
+				die "car of empty list" if args[0].length() == 0;
+				return args[0][0];
+			}
+			return args[0].get_car() if args[0] instanceof LispPair;
+			die "car expects pair or list";
+		}
+		case "cdr": {
+			if ( args[0] instanceof Array ) {
+				die "cdr of empty list" if args[0].length() == 0;
+				let out := [];
+				let i := 1;
+				while ( i < args[0].length() ) {
+					out.push(args[0][i]);
+					i++;
+				}
+				return out;
+			}
+			return args[0].get_cdr() if args[0] instanceof LispPair;
+			die "cdr expects pair or list";
+		}
+		case "length": return args[0].length();
+		case "append": return _append(args);
+		case "apply": return _resolve_result( _apply_proc( args[0], _make_apply_args(args), env ) );
+		case "map": return _map_lists( args, env, true );
+		case "for-each": return _map_lists( args, env, false );
+		case "filter": return _filter_list( args, env );
+		case "fold-left": return _fold_left( args, env );
+		case "fold-right": return _fold_right( args, env );
+		case "assoc": return _assoc( args, false );
+		case "assq": return _assoc( args, true );
+		case "member": return _member( args, false );
+		case "memq": return _member( args, true );
+
+		case "symbol->string": return args[0].get_name();
+		case "string->symbol": return sym( "" _ args[0] );
+		case "number->string": return "" _ args[0];
+		case "string->number": return ( "" _ args[0] ) + 0;
+		case "string-append": return _string_append(args);
+		case "string-length": return length args[0];
+		case "substring": return substr( args[0], args[1], args[2] );
+		case "string=?": return args.length() == 2 and args[0] eq args[1];
+		case "string-contains?": return contains( args[0], args[1] );
+		case "string-prefix?": return starts_with( args[0], args[1] );
+		case "string-suffix?": return ends_with( args[0], args[1] );
+		case "string-trim": return trim(args[0]);
+		case "string-split": return split( args[0], args[1] );
+		case "string-join": return join( args[0], args[1] );
+		case "string-replace": return replace( args[0], args[1], args[2], args.length() > 3 ? args[3] : "" );
+
+		case "vector": return new LispVector( values: args );
+		case "vector-length": return _vector_values( args[0], "vector-length" ).length();
+		case "vector-ref": return _vector_values( args[0], "vector-ref" )[ args[1] ];
+		case "vector-set!": {
+			_vector_values( args[0], "vector-set!" )[ args[1] ] := args[2];
+			return args[2];
+		}
+		case "list->vector": return new LispVector( values: _list_copy( args[0], "list->vector" ) );
+		case "vector->list": return _list_copy( _vector_values( args[0], "vector->list" ), "vector->list" );
+
+		case "bytevector": return new LispByteVector( values: args );
+		case "bytevector-length": return _byte_values( args[0], "bytevector-length" ).length();
+		case "bytevector-u8-ref": return _byte_values( args[0], "bytevector-u8-ref" )[ args[1] ];
+		case "bytevector-u8-set!": {
+			_byte_values( args[0], "bytevector-u8-set!" )[ args[1] ] := args[2];
+			return args[2];
+		}
+		case "list->bytevector": return new LispByteVector( values: _list_copy( args[0], "list->bytevector" ) );
+		case "bytevector->list": return _list_copy( _byte_values( args[0], "bytevector->list" ), "bytevector->list" );
+
+		case "string->char": return new LispChar( value: args[0] );
+		case "char->string": return _char_value( args[0], "char->string" );
+		case "char=?": return args.length() == 2 and
+			_char_value( args[0], "char=?" ) eq _char_value( args[1], "char=?" );
+
+		case "make-hash-table": return new LispHashTable( mode: "equal" );
+		case "make-eq-hash-table": return new LispHashTable( mode: "eq" );
+		case "hash-ref": return args[0].ref( args[1], args.length() > 2 ? args[2] : false );
+		case "hash-set!": return args[0].set_value( args[1], args[2] );
+		case "hash-delete!": return args[0].delete(args[1]);
+		case "hash-exists?": return args[0].exists(args[1]);
+		case "hash-keys": return args[0].keys();
+		case "hash-values": return args[0].values();
+
+		case "path": return new LispPath( path: args.length() > 0 ? args[0] : "" );
+		case "path-child": return new LispPath( path: _path_value(args[0]).child( "" _ args[1] ) );
+		case "path-parent": return new LispPath( path: _path_value(args[0]).parent() );
+		case "path-exists?": return _path_value(args[0]).exists();
+		case "path-file?": return _path_value(args[0]).is_file();
+		case "path-dir?": return _path_value(args[0]).is_dir();
+		case "path-slurp": return _path_value(args[0]).slurp_utf8();
+		case "path-spew": {
+			_path_value(args[0]).spew_utf8( "" _ args[1] );
+			return null;
+		}
+		case "path-append": {
+			_path_value(args[0]).append_utf8( "" _ args[1] );
+			return null;
+		}
+
+		case "regexp": return new LispRegexp(
+			pattern: "" _ args[0],
+			flags: args.length() > 1 ? "" _ args[1] : "",
+		);
+		case "regexp-match?": return matches( args[0], args[1].get_pattern(), args[1].get_flags() );
+		case "regexp-search": return search( args[0], args[1].get_pattern(), args[1].get_flags() );
+
+		case "open-input-file": return _make_input_file_port(args[0]);
+		case "open-output-file": return _make_output_file_port( args[0], false );
+		case "open-append-file": return _make_output_file_port( args[0], true );
+		case "current-input-port": return env.current_input_port();
+		case "current-output-port": return env.current_output_port();
+		case "current-error-port": return env.current_error_port();
+		case "read": return _require_input_port( _input_port( args, env ) ).read();
+		case "read-line": return _require_input_port( _input_port( args, env ) ).read_line();
+		case "read-char": return _require_input_port( _input_port( args, env ) ).read_char();
+		case "peek-char": return _require_input_port( _input_port( args, env ) ).peek_char();
+		case "display": {
+			_require_output_port( _output_port( args[1:], env ) )
+				.write_text( _display_text(args[0]) );
+			return null;
+		}
+		case "write": {
+			_require_output_port( _output_port( args[1:], env ) )
+				.write_text( lisp_repr(args[0]) );
+			return null;
+		}
+		case "newline": {
+			_require_output_port( _output_port( args, env ) ).write_text("\n");
+			return null;
+		}
+		case "flush-output-port": return null;
+		case "close-input-port": {
+			_require_input_port(args[0]).close();
+			return null;
+		}
+		case "close-output-port": {
+			_require_output_port(args[0]).close();
+			return null;
+		}
+		case "file-exists?": return _path_value(args[0]).exists();
+		case "delete-file": {
+			_path_value(args[0]).remove();
+			return null;
+		}
+		case "call-with-input-file": {
+			let port := _make_input_file_port(args[0]);
+			let result := _resolve_result( _apply_proc( args[1], [ port ], env ) );
+			port.close();
+			return result;
+		}
+		case "call-with-output-file": {
+			let port := _make_output_file_port( args[0], false );
+			let result := _resolve_result( _apply_proc( args[1], [ port ], env ) );
+			port.close();
+			return result;
+		}
+		case "with-input-from-file": {
+			let old := env.current_input_port();
+			let port := _make_input_file_port(args[0]);
+			env.current_input_port(port);
+			try {
+				let result := _resolve_result( _apply_proc( args[1], [], env ) );
+				port.close();
+				env.current_input_port(old);
+				return result;
+			}
+			catch ( Exception e ) {
+				port.close();
+				env.current_input_port(old);
+				throw e;
+			};
+		}
+		case "with-output-to-file": {
+			let old := env.current_output_port();
+			let port := _make_output_file_port( args[0], false );
+			env.current_output_port(port);
+			try {
+				let result := _resolve_result( _apply_proc( args[1], [], env ) );
+				port.close();
+				env.current_output_port(old);
+				return result;
+			}
+			catch ( Exception e ) {
+				port.close();
+				env.current_output_port(old);
+				throw e;
+			};
+		}
+
+		case "force": return args[0].force();
+		case "load": {
+			die "load expects one path string" if args.length() != 1;
+			return load_lisp( args[0], env );
+		}
+		case "error": {
+			_runtime_error( args.length() == 0 ? "Lisp error" : "" _ args[0] );
+		}
+		default: die "Unknown builtin: " _ name;
+	}
+}
+
+function _apply_proc ( proc, Array args, env ) {
+	return _apply_builtin( proc.get_name(), args, env ) if proc instanceof _Builtin;
+	if ( proc instanceof LispClosure ) {
+		let frame := new LispStackFrame( name: "<lambda>" );
+		env.call_stack().push(frame);
+		try {
+			let result := _call_closure( proc, args );
+			env.call_stack().pop();
+			return result;
+		}
+		catch ( Exception e ) {
+			env.call_stack().pop();
+			throw e;
+		};
+	}
+	return proc.call_args(args) if proc instanceof LispCallback and proc.get_kind() eq "proc";
+	if ( proc instanceof LispCallback ) {
+		let call := [ sym( proc.get_name() ) ];
+		for ( let arg in args ) {
+			call.push(arg);
+		}
+		return proc.call_raw( call, env );
+	}
+	die "Value is not callable";
+}
+
+function _parse_rules ( Array clauses ) {
+	let rules := [];
+	for ( let clause in clauses ) {
+		die "syntax-rules rule must be a list" unless clause instanceof Array;
+		die "syntax-rules rule expects pattern and template"
+			if clause.length() != 2;
+		rules.push({ pattern: clause[0], template: clause[1] });
+	}
+	return rules;
+}
+
+function _make_syntax_rules ( Array expr ) {
+	die "syntax-rules expects literals and rules" if expr.length() < 3;
+	let literal_expr := expr[1];
+	die "syntax-rules literals must be a list" unless literal_expr instanceof Array;
+	let lits := [];
+	for ( let lit in literal_expr ) {
+		lits.push( _symbol_name(lit) );
+	}
+	return new LispMacro(
+		literals: lits,
+		rules: _parse_rules( expr[2:] ),
+	);
+}
+
+function _macro_literal_set ( LispMacro macro ) {
+	let out := {};
+	for ( let name in macro.get_literals() ) {
+		out.set( name, true );
+	}
+	return out;
+}
+
+function _bind_match ( bindings, String name, value ) {
+	if ( bindings.exists(name) ) {
+		return bindings.get(name) == value;
+	}
+	bindings.set( name, value );
+	return true;
+}
+
+function _match_array ( Array pattern, Array expr, literals, bindings ) {
+	let pi := 0;
+	let ei := 0;
+	while ( pi < pattern.length() ) {
+		let repeated := pi + 1 < pattern.length() and
+			_same_symbol( pattern[pi + 1], "..." );
+		if ( repeated ) {
+			let pat := pattern[pi];
+			let captures := [];
+			while ( ei < expr.length() ) {
+				let child := {};
+				return false unless _match( pat, expr[ei], literals, child );
+				captures.push(child);
+				ei++;
+			}
+			for ( let key in captures.length() > 0 ? captures[0].keys() : [] ) {
+				let vals := [];
+				for ( let cap in captures ) {
+					vals.push( cap.get(key) );
+				}
+				bindings.set( key, vals );
+			}
+			pi += 2;
+			next;
+		}
+		return false if ei >= expr.length();
+		return false unless _match( pattern[pi], expr[ei], literals, bindings );
+		pi++;
+		ei++;
+	}
+	return ei == expr.length();
+}
+
+function _match ( pattern, expr, literals, bindings ) {
+	if ( pattern instanceof LispSymbol ) {
+		return true if pattern.get_name() eq "_";
+		if ( literals.exists(pattern.get_name()) ) {
+			return expr instanceof LispSymbol and expr.get_name() eq pattern.get_name();
+		}
+		return _bind_match( bindings, pattern.get_name(), expr );
+	}
+	if ( pattern instanceof Array ) {
+		return false unless expr instanceof Array;
+		return _match_array( pattern, expr, literals, bindings );
+	}
+	return pattern == expr;
+}
+
+function _template_has_ellipsis ( value ) {
+	return value instanceof Array and value.length() > 1 and
+		_same_symbol( value[ value.length() - 1 ], "..." );
+}
+
+function _expand_template ( template, bindings, Number idx := -1 ) {
+	if ( template instanceof LispSymbol ) {
+		if ( bindings.exists(template.get_name()) ) {
+			let value := bindings.get(template.get_name());
+			if ( idx >= 0 and value instanceof Array ) {
+				return value[idx];
+			}
+			return value;
+		}
+		return template;
+	}
+	if ( template instanceof Array ) {
+		let out := [];
+		let i := 0;
+		while ( i < template.length() ) {
+			let repeated := i + 1 < template.length() and
+				_same_symbol( template[i + 1], "..." );
+			if ( repeated ) {
+				let inner := template[i];
+				let count := 0;
+				if ( inner instanceof LispSymbol and bindings.exists(inner.get_name()) ) {
+					count := bindings.get(inner.get_name()).length();
+				}
+				else if ( _template_has_ellipsis(inner) ) {
+					count := 0;
+				}
+				else {
+					die "Cannot determine syntax-rules repetition length";
+				}
+				let j := 0;
+				while ( j < count ) {
+					out.push( _expand_template( inner, bindings, j ) );
+					j++;
+				}
+				i += 2;
+				next;
+			}
+			out.push( _expand_template( template[i], bindings, idx ) );
+			i++;
+		}
+		return out;
+	}
+	return template;
+}
+
+function _expand_macro_call ( LispMacro macro, Array expr ) {
+	let literals := _macro_literal_set(macro);
+	for ( let rule in macro.get_rules() ) {
+		let bindings := {};
+		if ( _match( rule{pattern}, expr, literals, bindings ) ) {
+			return _expand_template( rule{template}, bindings );
+		}
+	}
+	die "No syntax-rules pattern matched";
+}
+
+function expand ( expr, env? ) {
+	let actual_env := env == null ? core_env() : env;
+	if ( not ( expr instanceof Array ) or expr.length() == 0 ) {
+		return expr;
+	}
+	let head := expr[0];
+	if ( head instanceof LispSymbol ) {
+		let proc := null;
+		try {
+			proc := actual_env.get(head);
+		}
+		catch ( Exception e ) {
+			proc := null;
+		}
+		if ( proc instanceof LispMacro ) {
+			return expand( _expand_macro_call( proc, expr ), actual_env );
+		}
+	}
+	let out := [];
+	let changed := false;
+	for ( let item in expr ) {
+		let expanded_item := expand( item, actual_env );
+		changed := true if expanded_item != item;
+		out.push(expanded_item);
+	}
+	return changed ? out : expr;
+}
+
+function _eval_define ( Array expr, env ) {
+	if ( expr[1] instanceof Array or expr[1] instanceof LispPair ) {
+		let signature := expr[1];
+		let name := signature instanceof Array ? signature[0] : signature.get_car();
+		let params := signature instanceof Array ? signature[1:] : signature.get_cdr();
+		return env.define( name, new LispClosure(
+			params: params,
+			body: expr[2:],
+			env: env,
+		) );
+	}
+	return env.define( expr[1], lisp_eval( expr[2], env ) );
+}
+
+function _eval_guard ( Array expr, env ) {
+	die "guard expects bindings and body" if expr.length() < 3;
+	let spec := expr[1];
+	die "guard binding must be a list" unless spec instanceof Array and spec.length() > 0;
+	let err_sym := spec[0];
+	try {
+		let result := null;
+		for ( let body_expr in expr[2:] ) {
+			result := lisp_eval( body_expr, env );
+		}
+		return result;
+	}
+	catch ( Exception e ) {
+		let child := _child_env(env);
+		child.define( err_sym, e );
+		let clauses := spec[1:];
+		for ( let clause in clauses ) {
+			next unless clause instanceof Array and clause.length() > 0;
+			if ( _same_symbol( clause[0], "else" ) or _truthy(lisp_eval( clause[0], child )) ) {
+				return _eval_sequence( clause[1:], child, true );
+			}
+		}
+		throw e;
+	};
+}
+
+function _eval_define_syntax ( Array expr, env ) {
+	let macro := _make_syntax_rules(expr[2]);
+	macro.set_name(expr[1]);
+	return env.define( expr[1], macro );
+}
+
+function _eval_let ( Array expr, env, String kind ) {
+	let bindings := expr[1];
+	if ( kind eq "let" and bindings instanceof LispSymbol ) {
+		let name := bindings;
+		let named_bindings := expr[2];
+		let params := [];
+		let args := [];
+		for ( let binding in named_bindings ) {
+			params.push(binding[0]);
+			args.push( lisp_eval( binding[1], env ) );
+		}
+		let child := _child_env(env);
+		let closure := new LispClosure(
+			params: params,
+			body: expr[3:],
+			env: child,
+		);
+		child.define( name, closure );
+		return _call_closure( closure, args );
+	}
+	die kind _ " bindings must be a list" unless bindings instanceof Array;
+	let child := _child_env(env);
+	if ( kind eq "let*" ) {
+		for ( let binding in bindings ) {
+			child.define( binding[0], lisp_eval( binding[1], child ) );
+		}
+	}
+	else if ( kind eq "letrec" ) {
+		for ( let binding in bindings ) {
+			child.define( binding[0], null );
+		}
+		for ( let binding in bindings ) {
+			child.set_value( binding[0], lisp_eval( binding[1], child ) );
+		}
+	}
+	else {
+		for ( let binding in bindings ) {
+			child.define( binding[0], lisp_eval( binding[1], env ) );
+		}
+	}
+	return _eval_sequence( expr[2:], child, true );
+}
+
+function _eval_quasiquote ( expr, env ) {
+	if ( not ( expr instanceof Array ) ) {
+		return expr;
+	}
+	if ( expr.length() == 2 and _same_symbol( expr[0], "unquote" ) ) {
+		return lisp_eval( expr[1], env );
+	}
+	let out := [];
+	for ( let item in expr ) {
+		if ( item instanceof Array and item.length() == 2 and
+			_same_symbol( item[0], "unquote-splicing" ) ) {
+			let vals := lisp_eval( item[1], env );
+			die "unquote-splicing expects a list" unless vals instanceof Array;
+			for ( let val in vals ) {
+				out.push(val);
+			}
+		}
+		else {
+			out.push( _eval_quasiquote( item, env ) );
+		}
+	}
+	return out;
+}
+
+function _eval_cond ( Array clauses, env ) {
+	for ( let clause in clauses ) {
+		die "cond clause must be a list" unless clause instanceof Array;
+		if ( clause.length() == 0 ) {
+			next;
+		}
+		if ( _same_symbol( clause[0], "else" ) or _truthy(lisp_eval( clause[0], env )) ) {
+			if ( clause.length() == 1 ) {
+				return clause[0];
+			}
+			return _eval_sequence( clause[1:], env, true );
+		}
+	}
+	return null;
+}
+
+function _eval_case ( Array expr, env ) {
+	let key := lisp_eval( expr[1], env );
+	for ( let clause in expr[2:] ) {
+		die "case clause must be a list" unless clause instanceof Array and
+			clause.length() > 0;
+		if ( _same_symbol( clause[0], "else" ) ) {
+			return _eval_sequence( clause[1:], env, true );
+		}
+		die "case datums must be a list" unless clause[0] instanceof Array;
+		for ( let datum in clause[0] ) {
+			if ( _lisp_equal( key, datum ) ) {
+				return _eval_sequence( clause[1:], env, true );
+			}
+		}
+	}
+	return null;
+}
+
+function _eval_do ( Array expr, env ) {
+	let specs := expr[1];
+	let test := expr[2];
+	let body := expr[3:];
+	let child := _child_env(env);
+	for ( let spec in specs ) {
+		child.define( spec[0], lisp_eval( spec[1], env ) );
+	}
+	while ( true ) {
+		if ( _truthy( lisp_eval( test[0], child ) ) ) {
+			return test.length() == 1
+				? null
+				: _eval_sequence( test[1:], child, true );
+		}
+		for ( let item in body ) {
+			lisp_eval( item, child );
+		}
+		let next_values := [];
+		for ( let spec in specs ) {
+			let step := spec.length() > 2 ? spec[2] : spec[0];
+			next_values.push( lisp_eval( step, child ) );
+		}
+		let i := 0;
+		while ( i < specs.length() ) {
+			child.set_value( specs[i][0], next_values[i] );
+			i++;
+		}
+	}
+}
+
+function _eval_include ( Array expr, env ) {
+	let result := null;
+	for ( let item in expr[1:] ) {
+		result := load_lisp( item, env );
+	}
+	return result;
+}
+
+function _resolve_library_path ( String key, env ) {
+	let rel := key _ ".lizp";
+	for ( let root in env.load_paths() ) {
+		let candidate := root.child(rel);
+		return candidate if candidate.exists();
+	}
+	return null;
+}
+
+function _define_library ( Array expr, env ) {
+	let key := _name_list_key(expr[1]);
+	let lib_env := _child_env(env);
+	let exports := [];
+	for ( let clause in expr[2:] ) {
+		die "define-library clauses must be lists"
+			unless clause instanceof Array and clause.length() > 0;
+		if ( _same_symbol( clause[0], "export" ) ) {
+			for ( let name in clause[1:] ) {
+				exports.push( _symbol_name(name) );
+			}
+		}
+		else if ( _same_symbol( clause[0], "import" ) ) {
+			for ( let spec in clause[1:] ) {
+				import_library( spec, lib_env );
+			}
+		}
+		else if ( _same_symbol( clause[0], "begin" ) ) {
+			lisp_eval_all( clause[1:], lib_env );
+		}
+		else if ( _same_symbol( clause[0], "include" ) ) {
+			_eval_include( clause, lib_env );
+		}
+		else {
+			die "Unknown define-library clause: " _ lisp_repr(clause[0]);
+		}
+	}
+	let library := new LispLibrary( name: key, exports: exports, env: lib_env );
+	env.libraries().set( key, library );
+	return library;
+}
+
+function load_library ( name, env? ) {
+	let actual_env := env == null ? core_env() : env;
+	let key := _name_list_key(name);
+	return actual_env.libraries().get(key) if actual_env.libraries().exists(key);
+	if ( actual_env.library_stack().contains(key) ) {
+		_runtime_exception( "Recursive library import: " _ key );
+	}
+	actual_env.library_stack().push(key);
+	let path := _resolve_library_path( key, actual_env );
+	if ( path != null ) {
+		load_lisp( path, actual_env );
+	}
+	else {
+		let module_source := _wrapped_lisp_source( key _ ".lizp", actual_env );
+		_runtime_exception( "Cannot find library: " _ key )
+			if module_source == null;
+		_eval_lisp_source(
+			module_source{source},
+			module_source{source_name},
+			actual_env,
+			null,
+			module_source{base_module},
+		);
+	}
+	actual_env.library_stack().pop();
+	_runtime_exception( "Library did not define itself: " _ key )
+		unless actual_env.libraries().exists(key);
+	return actual_env.libraries().get(key);
+}
+
+function _library_export_map ( spec, env ) {
+	if ( spec instanceof Array and spec.length() > 0 and spec[0] instanceof LispSymbol ) {
+		let op := spec[0].get_name();
+		if ( op eq "only" ) {
+			let map := _library_export_map( spec[1], env );
+			let keep := {};
+			for ( let name in spec[2:] ) {
+				keep.set( _symbol_name(name), true );
+			}
+			for ( let name in map.keys() ) {
+				map.remove(name) unless keep.exists(name);
+			}
+			return map;
+		}
+		if ( op eq "except" ) {
+			let map := _library_export_map( spec[1], env );
+			for ( let name in spec[2:] ) {
+				map.remove( _symbol_name(name) );
+			}
+			return map;
+		}
+		if ( op eq "prefix" ) {
+			let map := _library_export_map( spec[1], env );
+			let out := {};
+			let prefix := _symbol_name(spec[2]);
+			for ( let name in map.keys() ) {
+				out.set( prefix _ name, map.get(name) );
+			}
+			return out;
+		}
+			if ( op eq "rename" ) {
+				let map := _library_export_map( spec[1], env );
+				for ( let pair in spec[2:] ) {
+					let old := _symbol_name(pair[0]);
+					let replacement := _symbol_name(pair[1]);
+					map.set( replacement, map.get(old) );
+					map.remove(old);
+				}
+			return map;
+		}
+	}
+	let library := load_library( spec, env );
+	let out := {};
+	for ( let name in library.get_exports() ) {
+		out.set( name, library.get_env().get_bindings().get(name) );
+	}
+	return out;
+}
+
+function import_library ( spec, env? ) {
+	let actual_env := env == null ? core_env() : env;
+	let map := _library_export_map( spec, actual_env );
+	for ( let name in map.keys() ) {
+		actual_env.define_name( name, map.get(name) );
+	}
+	return null;
+}
+
+function _eval_import ( Array expr, env ) {
+	for ( let spec in expr[1:] ) {
+		import_library( spec, env );
+	}
+	return null;
+}
+
+function _eval_expr ( expr, env ) {
+	if ( expr instanceof LispSymbol ) {
+		return env.get(expr);
+	}
+	if ( not ( expr instanceof Array ) ) {
+		return expr;
+	}
+	if ( expr.length() == 0 ) {
+		return [];
+	}
+
+	let head := expr[0];
+	if ( head instanceof LispSymbol ) {
+		let name := head.get_name();
+		return expr[1] if name eq "quote";
+		return _eval_quasiquote( expr[1], env ) if name eq "quasiquote";
+		return _eval_define( expr, env ) if name eq "define";
+		return _eval_define_syntax( expr, env ) if name eq "define-syntax";
+		return _define_library( expr, env ) if name eq "define-library";
+		return _eval_import( expr, env ) if name eq "import";
+		return _eval_include( expr, env ) if name eq "include";
+		return env.set_value( expr[1], lisp_eval( expr[2], env ) ) if name eq "set!";
+		return new LispClosure( params: expr[1], body: expr[2:], env: env )
+			if name eq "lambda";
+		return new LispPromise( expr: expr[1], env: env ) if name eq "delay";
+		return _eval_sequence( expr[1:], env, true ) if name eq "begin";
+		if ( name eq "if" ) {
+			return _tail( _truthy(lisp_eval( expr[1], env )) ? expr[2] : expr[3], env );
+		}
+		return _eval_let( expr, env, name ) if [ "let", "let*", "letrec" ].contains(name);
+		return _eval_cond( expr[1:], env ) if name eq "cond";
+		return _eval_case( expr, env ) if name eq "case";
+		return _eval_do( expr, env ) if name eq "do";
+		return _eval_guard( expr, env ) if name eq "guard";
+		if ( name eq "and" ) {
+			let result := true;
+			let i := 1;
+			while ( i < expr.length() ) {
+				result := lisp_eval( expr[i], env );
+				return false unless _truthy(result);
+				i++;
+			}
+			return result;
+		}
+		if ( name eq "or" ) {
+			let i := 1;
+			while ( i < expr.length() ) {
+				let result := lisp_eval( expr[i], env );
+				return result if _truthy(result);
+				i++;
+			}
+			return false;
+		}
+	}
+
+	let expanded := expand( expr, env );
+	return _tail( expanded, env ) if expanded != expr;
+
+	let proc := lisp_eval( head, env );
+	if (
+		proc instanceof LispCallback and
+		( proc.get_kind() eq "raw" or proc.get_kind() eq "env" )
+	) {
+		return proc.call_raw( expr, env );
+	}
+	let args := _eval_list_values( expr[1:], env );
+	return _apply_proc( proc, args, env );
+}
+
+function lisp_eval ( expr, env? ) {
+	let actual_env := env == null ? standard_env() : env;
+	if ( expr instanceof LispProgram ) {
+		actual_env.program_stack().push(expr);
+		try {
+			let result := lisp_eval_all( expr.get_exprs(), actual_env );
+			actual_env.program_stack().pop();
+			return result;
+		}
+		catch ( Exception e ) {
+			actual_env.program_stack().pop();
+			throw e;
+		};
+	}
+	let current := expr;
+	let current_env := actual_env;
+	let saved_stack := _copy_stack(actual_env);
+	while ( true ) {
+		let result := null;
+		try {
+			result := _eval_expr( current, current_env );
+		}
+		catch ( Exception e ) {
+			let wrapped := _wrap_runtime_error( e, current, current_env );
+			actual_env.root().get_bindings().set( "__call_stack", saved_stack );
+			throw wrapped;
+		};
+		if ( result instanceof _TailCall ) {
+			current_env.root().get_bindings().set( "__call_stack", result.get_stack() );
+			current := result.get_expr();
+			current_env := result.get_env();
+			next;
+		}
+		actual_env.root().get_bindings().set( "__call_stack", saved_stack );
+		return result;
+	}
+}
+
+function lisp_eval_all ( Array exprs, env? ) {
+	let actual_env := env == null ? standard_env() : env;
+	let result := null;
+	for ( let expr in exprs ) {
+		result := lisp_eval( expr, actual_env );
+	}
+	return result;
+}
+
+function _resolve_load_path ( target, env ) {
+	let path := target instanceof Path ? target : new Path( "" _ target );
+	let base := env.base_dir();
+	if ( base != null and not path.is_absolute() ) {
+		let candidate := base.child( "" _ target );
+		return candidate if candidate.exists();
+	}
+	if ( not path.is_absolute() ) {
+		for ( let root in env.load_paths() ) {
+			let candidate := root.child( "" _ target );
+			return candidate if candidate.exists();
+		}
+	}
+	return path;
+}
+
+function _module_parent ( String module_stem ) {
+	let parts := split( module_stem, "/" );
+	return "" if parts.length() <= 1;
+	parts.pop();
+	return join( "/", parts );
+}
+
+function _safe_lizp_module_stem ( String target, String base_module ) {
+	return null unless ends_with( target, ".lizp" );
+	return null if starts_with( target, "/" );
+	return null if contains( target, "\\" );
+	let stem := substr( target, 0, (length target) - (length ".lizp") );
+	return null if stem eq "";
+	let segments := split( stem, "/" );
+	for ( let segment in segments ) {
+		return null if segment eq "" or segment eq "." or segment eq "..";
+		return null unless matches(
+			segment,
+			"^[A-Za-z_][A-Za-z0-9_]*$",
+		);
+	}
+	return base_module eq "" ? stem : base_module _ "/" _ stem;
+}
+
+function _zuzu_module_lisp_source ( String module_name ) {
+	let source := _zuzu_eval(
+		"from " _ module_name _ " try import LISP_SOURCE as _LISP_SOURCE;\n" _
+		"_LISP_SOURCE;\n",
+	);
+	return null if source == null;
+	_runtime_exception(
+		"Module " _ module_name _ " must export String LISP_SOURCE",
+	) unless source instanceof String;
+	return source;
+}
+
+function _wrapped_lisp_source ( target, env ) {
+	return null unless target instanceof String;
+	let stem := _safe_lizp_module_stem( target, env.base_module() );
+	return null if stem == null;
+	let module_name := "lang/lisp/module/" _ stem;
+	let source := _zuzu_module_lisp_source(module_name);
+	return null if source == null;
+	return {
+		source: source,
+		source_name: "<module:" _ module_name _ ">",
+		base_module: _module_parent(stem),
+		module_name: module_name,
+	};
+}
+
+function _restore_base_dir ( env, old_base ) {
+	if ( old_base == null ) {
+		env.clear_base_dir();
+	}
+	else {
+		env.base_dir(old_base);
+	}
+}
+
+function _restore_base_module ( env, String old_base_module ) {
+	if ( old_base_module eq "" ) {
+		env.clear_base_module();
+	}
+	else {
+		env.base_module(old_base_module);
+	}
+}
+
+function _eval_lisp_source (
+	String source,
+	String source_name,
+	env,
+	base_dir,
+	String base_module
+) {
+	let key := source_name;
+	if ( env.load_stack().contains(key) ) {
+		throw new LispRuntimeError( message: "Recursive load: " _ key );
+	}
+	let old_base := env.base_dir();
+	let old_base_module := env.base_module();
+	env.load_stack().push(key);
+	if ( base_dir == null ) {
+		env.clear_base_dir();
+	}
+	else {
+		env.base_dir(base_dir);
+	}
+	env.base_module(base_module);
+	try {
+		let program := parse_program( source, source_name );
+		let result := lisp_eval( program, env );
+		env.load_stack().pop();
+		_restore_base_dir( env, old_base );
+		_restore_base_module( env, old_base_module );
+		return result;
+	}
+	catch ( Exception e ) {
+		env.load_stack().pop();
+		_restore_base_dir( env, old_base );
+		_restore_base_module( env, old_base_module );
+		throw e;
+	};
+}
+
+function load_lisp ( target, env? ) {
+	let actual_env := env == null ? standard_env() : env;
+	let path := _resolve_load_path( target, actual_env );
+	if ( path.exists() ) {
+		return _eval_lisp_source(
+			path.slurp_utf8(),
+			path.to_String(),
+			actual_env,
+			path.parent(),
+			"",
+		);
+	}
+	let module_source := _wrapped_lisp_source( target, actual_env );
+	if ( module_source != null ) {
+		return _eval_lisp_source(
+			module_source{source},
+			module_source{source_name},
+			actual_env,
+			null,
+			module_source{base_module},
+		);
+	}
+	let message := "Cannot find Lisp source: " _ target;
+	if ( target instanceof String ) {
+		let stem := _safe_lizp_module_stem( target, actual_env.base_module() );
+		if ( stem != null ) {
+			message := message _ " or wrapper lang/lisp/module/" _ stem;
+		}
+	}
+	_runtime_exception(message);
+}
+
+function lisp_repr ( value ) {
+	if ( value == null ) {
+		return "()";
+	}
+	if ( value == true ) {
+		return "#t";
+	}
+	if ( value == false ) {
+		return "#f";
+	}
+	if ( value instanceof LispSymbol ) {
+		return value.get_name();
+	}
+	if ( value instanceof LispChar ) {
+		if ( value.get_value() eq " " ) {
+			return "#\\space";
+		}
+		if ( value.get_value() eq "\n" ) {
+			return "#\\newline";
+		}
+		if ( value.get_value() eq "\t" ) {
+			return "#\\tab";
+		}
+		return "#\\" _ value.get_value();
+	}
+	if ( typeof value == "String" ) {
+		return "\"" _ value _ "\"";
+	}
+	if ( value instanceof LispVector ) {
+		let parts := [];
+		for ( let item in value.get_values() ) {
+			parts.push( lisp_repr(item) );
+		}
+		return "#(" _ join( " ", parts ) _ ")";
+	}
+	if ( value instanceof LispByteVector ) {
+		let parts := [];
+		for ( let item in value.get_values() ) {
+			parts.push( "" _ item );
+		}
+		return "#u8(" _ join( " ", parts ) _ ")";
+	}
+	if ( value instanceof LispEOF ) {
+		return "#!eof";
+	}
+	if ( value instanceof LispHashTable ) {
+		return "#<hash-table>";
+	}
+	if ( value instanceof LispInputPort ) {
+		return "#<input-port>";
+	}
+	if ( value instanceof LispOutputPort ) {
+		return "#<output-port>";
+	}
+	if ( value instanceof LispPath ) {
+		return "#<path " _ value.to_String() _ ">";
+	}
+	if ( value instanceof LispRegexp ) {
+		return "#<regexp " _ value.get_pattern() _ ">";
+	}
+	if ( value instanceof LispPromise ) {
+		return "#<promise>";
+	}
+	if ( value instanceof LispPair ) {
+		return "(" _ lisp_repr( value.get_car() ) _ " . " _
+			lisp_repr( value.get_cdr() ) _ ")";
+	}
+	if ( value instanceof Array ) {
+		let parts := [];
+		for ( let item in value ) {
+			parts.push( lisp_repr(item) );
+		}
+		return "(" _ join( " ", parts ) _ ")";
+	}
+	return "" _ value;
+}
+
+function core_env () {
+	let env := new LispEnv();
+	for ( let name in [
+		"+", "-", "*", "/", "=", "<", ">", "<=", ">=",
+		"zero?", "positive?", "negative?", "even?", "odd?", "modulo",
+		"abs", "min", "max", "random", "exp", "log", "log10", "expt",
+		"sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "pi",
+		"eq?", "equal?", "list", "apply", "map", "for-each", "filter",
+		"fold-left", "fold-right", "cons", "car", "cdr", "null?",
+		"pair?", "list?", "vector?", "bytevector?", "hash-table?",
+		"char?", "path?", "regexp?", "input-port?", "output-port?",
+		"eof-object?", "not", "symbol?", "symbol->string",
+		"string->symbol", "number->string", "string->number",
+		"number?", "string?", "string-append", "string-length",
+		"substring", "string=?", "string-contains?", "string-prefix?",
+		"string-suffix?", "string-trim", "string-split", "string-join",
+		"string-replace", "boolean?", "procedure?",
+		"length", "append", "vector", "vector-length", "vector-ref",
+		"vector-set!", "list->vector", "vector->list", "assoc", "assq",
+		"member", "memq", "bytevector", "bytevector-length",
+		"bytevector-u8-ref", "bytevector-u8-set!", "list->bytevector",
+		"bytevector->list", "string->char", "char->string", "char=?",
+		"make-hash-table", "make-eq-hash-table", "hash-ref", "hash-set!",
+		"hash-delete!", "hash-exists?", "hash-keys", "hash-values",
+		"path", "path-child", "path-parent", "path-exists?", "path-file?",
+		"path-dir?", "path-slurp", "path-spew", "path-append",
+		"regexp", "regexp-match?", "regexp-search", "open-input-file",
+		"open-output-file", "open-append-file", "current-input-port",
+		"current-output-port", "current-error-port", "read", "read-line",
+		"read-char", "peek-char", "display", "write", "newline",
+		"flush-output-port", "close-input-port", "close-output-port",
+		"file-exists?", "delete-file", "call-with-input-file",
+		"call-with-output-file", "with-input-from-file",
+		"with-output-to-file", "force", "load", "error",
+	] ) {
+		env.define_name( name, _builtin(name) );
+	}
+	env.define_name( "#t", true );
+	env.define_name( "#f", false );
+	env.current_input_port( new LispInputPort( source: "", source_name: "<stdin>" ) );
+	env.current_output_port( new LispOutputPort( target: "stdout" ) );
+	env.current_error_port( new LispOutputPort( target: "stderr" ) );
+	return env;
+}
+
+function standard_env ( options? ) {
+	let actual_options := options == null ? {} : options;
+	let env := core_env();
+	if ( not actual_options.exists("prelude") or actual_options{prelude} ) {
+		load_lisp( "prelude.lizp", env );
+	}
+	return env;
+}
+
+function lisp_error_message ( error ) {
+	let message := error{message};
+	let location := error instanceof LispRuntimeError ? error.get_location() : null;
+	if ( error instanceof LispRuntimeError and location != null ) {
+		return "" _ location _ ": error: " _ message;
+	}
+	return "" _ message;
+}
+
+function lisp_error_report ( error ) {
+	let lines := [ lisp_error_message(error) ];
+	if ( error instanceof LispRuntimeError ) {
+		for ( let frame in error.get_stack() ) {
+			lines.push( "  at " _ frame.to_String() );
+		}
+	}
+	return join( "\n", lines );
+}
+
+class LispInterpreter {
+	let env with get := null;
+
+	method __build__ () {
+		env := standard_env() if env == null;
+	}
+
+	method eval ( expr ) {
+		return lisp_eval( expr, env );
+	}
+
+	method eval_string ( String source ) {
+		return self.eval( parse_sexpr(source) );
+	}
+}

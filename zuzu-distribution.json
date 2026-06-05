@@ -1,0 +1,17 @@
+{
+	"name": "lang-lisp",
+	"version": "0.0.1",
+	"author": "Toby Inkster",
+	"repo": "https://github.com/tobyink/zuzu-lang-lisp",
+	"license": "Artistic-1.0 OR GPL-2.0-or-later",
+	"status": "trial",
+	"abstract": "Parse and evaluate Lisp/Scheme-style S-expressions",
+	"dependencies": {
+		"std/eval": "0",
+		"std/getopt": "0",
+		"std/io": "0",
+		"std/math": "0",
+		"std/proc": "0",
+		"std/string": "0"
+	}
+}

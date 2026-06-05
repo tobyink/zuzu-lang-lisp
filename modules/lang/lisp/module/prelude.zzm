@@ -1,0 +1,66 @@
+=encoding utf8
+
+=head1 NAME
+
+lang/lisp/module/prelude - Packaged Lisp prelude source.
+
+=head1 SYNOPSIS
+
+  from lang/lisp/module/prelude import LISP_SOURCE;
+
+=head1 DESCRIPTION
+
+This module wraps the Lisp prelude source in an installable Zuzu module.
+C<lang/lisp/eval> loads it when C<standard_env()> is built.
+
+=head1 EXPORTS
+
+=head2 Constants
+
+=over
+
+=item C<LISP_SOURCE>
+
+String containing the Lisp source code.
+
+=back
+
+=head1 COPYRIGHT AND LICENCE
+
+B<< lang/lisp/module/prelude >> is copyright Toby Inkster.
+
+It is free software; you may redistribute it and/or modify it under
+the terms of either the Artistic License 1.0 or the GNU General Public
+License version 2.
+
+=cut
+
+const LISP_SOURCE := """(define (identity x) x)
+(define (second xs) (car (cdr xs)))
+(define (third xs) (car (cdr (cdr xs))))
+(define (caar x) (car (car x)))
+(define (cadr x) (car (cdr x)))
+(define (cdar x) (cdr (car x)))
+(define (cddr x) (cdr (cdr x)))
+(define (caaar x) (car (car (car x))))
+(define (caadr x) (car (car (cdr x))))
+(define (cadar x) (car (cdr (car x))))
+(define (caddr x) (car (cdr (cdr x))))
+(define (list-ref xs n) (if (= n 0) (car xs) (list-ref (cdr xs) (- n 1))))
+(define (list-tail xs n) (if (= n 0) xs (list-tail (cdr xs) (- n 1))))
+(define (reverse xs)
+  (let loop ((rest xs) (out (list)))
+    (if (null? rest) out (loop (cdr rest) (cons (car rest) out)))))
+(define (any pred xs)
+  (if (null? xs) #f (or (pred (car xs)) (any pred (cdr xs)))))
+(define (every pred xs)
+  (if (null? xs) #t (and (pred (car xs)) (every pred (cdr xs)))))
+(define-syntax when
+  (syntax-rules ()
+    ((when test body ...)
+     (if test (begin body ...)))))
+(define-syntax unless
+  (syntax-rules ()
+    ((unless test body ...)
+     (if (not test) (begin body ...)))))
+""";

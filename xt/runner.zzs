@@ -1,0 +1,80 @@
+from test/more import *;
+
+author_testing();
+requires_capability("proc");
+
+from std/proc import Env, Proc;
+
+let env := {
+	PATH: Env.get( "PATH", "" ),
+	ZUZULIB: "modules",
+};
+let zuzu := Env.get( "ZUZU", "" );
+env.set( "ZUZU", zuzu ) if zuzu ne "";
+
+let module_files := Proc.run(
+	"find",
+	[ "modules", "-type", "f", "!", "-name", "*.zzm" ],
+	{ capture_stdout: true, capture_stderr: true },
+);
+is( module_files{stdout}, "", "modules only contains installable .zzm files" );
+
+let eval_run := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "-e", "(+ 1 2 3)" ],
+	{ capture_stdout: true, capture_stderr: true, env: env },
+);
+is( eval_run{exit_code}, 0, "lizp -e exits successfully" );
+is( eval_run{stdout}, "6\n", "lizp -e prints final value" );
+
+let prelude_run := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "-e", "(list-ref (list 1 2 3) 1)" ],
+	{ capture_stdout: true, capture_stderr: true, env: env },
+);
+is( prelude_run{stdout}, "2\n", "lizp loads the prelude by default" );
+
+let core_only := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "--core-only", "-e", "(+ 1 2)" ],
+	{ capture_stdout: true, capture_stderr: true, env: env },
+);
+is( core_only{stdout}, "3\n", "lizp --core-only keeps core primitives" );
+
+let no_stdlib := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "--no-stdlib", "-e", "'ok" ],
+	{ capture_stdout: true, capture_stderr: true, env: env },
+);
+is( no_stdlib{stdout}, "ok\n", "lizp --no-stdlib keeps special forms" );
+
+let stdin_run := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "-" ],
+	{
+		capture_stdout: true,
+		capture_stderr: true,
+		stdin: "(string-append \"a\" \"b\")",
+		env: env,
+	},
+);
+is( stdin_run{stdout}, "\"ab\"\n", "lizp reads stdin" );
+
+let help_run := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "--help" ],
+	{ capture_stdout: true, capture_stderr: true, env: env },
+);
+is( help_run{exit_code}, 0, "lizp --help exits successfully" );
+like( help_run{stdout}, /Usage: lizp/, "lizp --help prints usage" );
+
+let error_run := Proc.run(
+	"zuzu",
+	[ "scripts/lizp", "-e", "(missing)" ],
+	{ capture_stdout: true, capture_stderr: true, env: env },
+);
+ok( error_run{exit_code} != 0, "lizp errors exit non-zero" );
+like( error_run{stderr}, /Unbound symbol/, "lizp errors print stderr" );
+like( error_run{stderr}, /-e:1:2/, "lizp errors include source locations" );
+
+done_testing();

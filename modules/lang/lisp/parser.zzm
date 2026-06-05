@@ -1,0 +1,932 @@
+=encoding utf8
+
+=head1 NAME
+
+lang/lisp/parser - Parse Lisp/Scheme S-expressions.
+
+=head1 SYNOPSIS
+
+  from lang/lisp/parser import parse_program, parse_sexpr, sym;
+
+  let expr := parse_sexpr("(+ 1 2)");
+  say( expr[0].get_name() );  // +
+
+  let direct := [ sym("+"), 1, 2 ];
+
+  let program := parse_program("(define x 1)\n(+ x 2)", "example.lizp");
+  say( program.location_for( program.get_exprs()[1] ) );  // example.lizp:2:1
+
+=head1 DESCRIPTION
+
+This module provides a general-purpose S-expression reader for
+Lisp/Scheme-style source text. It only parses; evaluation is provided by
+C<lang/lisp/eval>.
+
+Parsed values use ordinary Zuzu values where that is unambiguous:
+
+=over
+
+=item * proper lists become C<Array> values;
+
+=item * strings become C<String> values;
+
+=item * numbers become C<Number> values;
+
+=item * C<#t> and C<#f> become C<Boolean> values;
+
+=item * symbols become C<LispSymbol> objects;
+
+=item * dotted pairs become C<LispPair> chains.
+
+=item * vector literals become C<LispVector> objects.
+
+=item * character literals become C<LispChar> objects.
+
+=item * bytevector literals become C<LispByteVector> objects.
+
+=back
+
+Symbols are objects so callers can pass nested Zuzu arrays directly to
+the evaluator while keeping Zuzu strings available as Lisp string
+literals. Use C<sym(name)> when building those arrays in ZuzuScript.
+
+The reader supports line comments beginning with C<;>, POD blocks
+beginning with a column-one directive such as C<=head1> and ending at
+C<=cut>, double-quoted strings with simple escapes, quote syntax C<'>,
+quasiquote syntax C<`>, unquote syntax C<,>, unquote-splicing syntax
+C<,@>, dotted pairs, vector syntax C<#(...)>, character syntax C<#\x>,
+and bytevector syntax C<#u8(...)>.
+
+C<parse_program> and C<load_program> keep source text, source name, and a
+source map. This is useful for tools that want diagnostics or editor
+integration.
+
+=head1 EXPORTS
+
+=head2 Functions
+
+=over
+
+=item C<< parse_sexpr(String text) >>
+
+Parses C<text> and returns one S-expression value. Throws if the input
+contains zero expressions, more than one expression, an unterminated
+string or list, an unexpected closing parenthesis, or an invalid dotted
+pair.
+
+=item C<< parse_sexprs(String text) >>
+
+Parses C<text> and returns an C<Array> containing every S-expression in
+the input. Whitespace, line comments, and embedded POD blocks are skipped
+between expressions.
+
+=item C<< parse_program(String text, String source_name?) >>
+
+Parses C<text> and returns a C<LispProgram>. C<source_name> defaults to
+C<< <string> >> and is used in source locations.
+
+=item C<< load_sexprs(Path path) >>
+
+Reads UTF-8 text from a C<std/io> C<Path> and returns the same value as
+C<parse_sexprs>.
+
+=item C<< load_program(Path path) >>
+
+Reads UTF-8 text from a C<std/io> C<Path> and returns the same value as
+C<parse_program>, using the path text as the source name.
+
+=item C<< sym(String name) >>
+
+Returns the interned C<LispSymbol> for C<name>. This is the preferred way
+to build direct nested-array S-expressions:
+
+  lisp_eval( [ sym("+"), 1, 2 ], env );
+
+=item C<< is_symbol(value) >>
+
+Returns C<true> when C<value> is a C<LispSymbol>, otherwise C<false>.
+
+=back
+
+=head2 Classes
+
+=over
+
+=item C<LispError>
+
+Base exception type for Lisp parser and evaluator errors. It carries an
+optional C<location()> value when a caller attaches one.
+
+=item C<LispSyntaxError>
+
+Subclass of C<LispError> reserved for syntax-level failures.
+
+=item C<LispRuntimeError>
+
+Subclass of C<LispError> used by the evaluator for Lisp-level runtime
+errors.
+
+=item C<LispSymbol>
+
+Represents a Lisp symbol.
+
+=over
+
+=item C<< symbol.get_name() >>
+
+Returns the symbol name as a C<String>.
+
+=item C<< symbol.to_String() >>
+
+Returns the symbol name for string coercion.
+
+=back
+
+=item C<LispPair>
+
+Represents a dotted pair.
+
+=over
+
+=item C<< pair.get_car() >>
+
+Returns the pair head.
+
+=item C<< pair.get_cdr() >>
+
+Returns the pair tail.
+
+=back
+
+=item C<LispVector>
+
+Represents a Lisp vector.
+
+=over
+
+=item C<< vector.get_values() >>
+
+Returns the underlying C<Array>.
+
+=item C<< vector.get_values().length() >>
+
+Returns the number of values in the vector.
+
+=item C<< vector.ref(Number index) >>
+
+Returns the value at C<index>.
+
+=item C<< vector.set_value(Number index, value) >>
+
+Sets and returns the value at C<index>.
+
+=item C<< vector.to_Array() >>
+
+Returns a shallow copy of the vector values as an C<Array>.
+
+=back
+
+=item C<LispChar>
+
+Represents a Lisp character.
+
+=over
+
+=item C<< char.get_value() >>
+
+Returns the character as a one-character C<String>.
+
+=back
+
+=item C<LispByteVector>
+
+Represents a bytevector.
+
+=over
+
+=item C<< bytevector.get_values() >>
+
+Returns the underlying C<Array> of byte values.
+
+=item C<< bytevector.get_values().length() >>
+
+Returns the number of bytes.
+
+=item C<< bytevector.ref(Number index) >>
+
+Returns the byte at C<index>.
+
+=item C<< bytevector.set_value(Number index, Number value) >>
+
+Sets and returns the byte at C<index>.
+
+=item C<< bytevector.to_Array() >>
+
+Returns a shallow copy of the byte values.
+
+=back
+
+=item C<LispEOF>
+
+Represents the Lisp end-of-file object used by ports.
+
+=item C<LispSourceLocation>
+
+Represents a source position.
+
+=over
+
+=item C<< location.get_source_name() >>
+
+Returns the source name.
+
+=item C<< location.get_index() >>
+
+Returns the zero-based character index.
+
+=item C<< location.get_line() >>
+
+Returns the one-based line number.
+
+=item C<< location.get_column() >>
+
+Returns the one-based column number.
+
+=item C<< location.to_String() >>
+
+Returns C<source:line:column>.
+
+=back
+
+=item C<LispProgram>
+
+Parsed source plus source metadata.
+
+=over
+
+=item C<< program.get_exprs() >>
+
+Returns the parsed top-level expressions.
+
+=item C<< program.get_source() >>
+
+Returns the original source text.
+
+=item C<< program.get_source_name() >>
+
+Returns the source name used while parsing.
+
+=item C<< program.get_source_map() >>
+
+Returns source-map entries. Each entry contains C<value> and
+C<location>.
+
+=item C<< program.location_for(value) >>
+
+Returns the first recorded C<LispSourceLocation> for C<value>, or
+C<null> if no location is recorded.
+
+=back
+
+=item C<SExprReader>
+
+Stateful reader used by the convenience functions. Most callers should
+use C<parse_sexpr>, C<parse_sexprs>, or C<parse_program>.
+
+=over
+
+=item C<< reader.get_source_map() >>
+
+Returns source-map entries recorded by this reader.
+
+=item C<< reader.read_expr() >>
+
+Reads and returns one expression from the current reader position.
+
+=item C<< reader.read_all() >>
+
+Reads all remaining expressions and returns them as an C<Array>.
+
+=item C<< reader.eof() >>
+
+Skips whitespace and comments, then returns whether the reader is at end
+of input.
+
+=back
+
+=back
+
+=head1 COPYRIGHT AND LICENCE
+
+B<< lang/lisp/parser >> is copyright Toby Inkster.
+
+It is free software; you may redistribute it and/or modify it under
+the terms of either the Artistic License 1.0 or the GNU General Public
+License version 2.
+
+=cut
+
+from std/io import Path;
+from std/string import join, substr;
+
+let _SYMBOLS := {};
+
+function _datum_string;
+
+class LispSymbol {
+	let String name with get := "";
+
+	method to_String () {
+		return name;
+	}
+}
+
+class LispPair {
+	let car with get := null;
+	let cdr with get := null;
+
+	method to_String () {
+		return _datum_string(self);
+	}
+}
+
+class LispVector {
+	let Array values with get := [];
+
+	method __build__ () {
+		values := [] if values == null;
+	}
+
+	method length () {
+		return values.length();
+	}
+
+	method ref ( Number index ) {
+		return values[index];
+	}
+
+	method set_value ( Number index, value ) {
+		values[index] := value;
+		return value;
+	}
+
+	method to_Array () {
+		let out := [];
+		for ( let value in values ) {
+			out.push(value);
+		}
+		return out;
+	}
+
+	method to_String () {
+		let parts := [];
+		for ( let value in values ) {
+			parts.push( _datum_string(value) );
+		}
+		return "#(" _ join( " ", parts ) _ ")";
+	}
+}
+
+class LispChar {
+	let String value with get := "";
+
+	method to_String () {
+		return "#\\space" if value eq " ";
+		return "#\\newline" if value eq "\n";
+		return "#\\tab" if value eq "\t";
+		return "#\\" _ value;
+	}
+}
+
+class LispByteVector {
+	let Array values with get := [];
+
+	method __build__ () {
+		values := [] if values == null;
+	}
+
+	method length () {
+		return values.length();
+	}
+
+	method ref ( Number index ) {
+		return values[index];
+	}
+
+	method set_value ( Number index, Number value ) {
+		die "bytevector value must be 0..255"
+			if value < 0 or value > 255 or value != int(value);
+		values[index] := value;
+		return value;
+	}
+
+	method to_Array () {
+		let out := [];
+		for ( let value in values ) {
+			out.push(value);
+		}
+		return out;
+	}
+
+	method to_String () {
+		let parts := [];
+		for ( let value in values ) {
+			parts.push( "" _ value );
+		}
+		return "#u8(" _ join( " ", parts ) _ ")";
+	}
+}
+
+class LispEOF {
+	method to_String () {
+		return "#!eof";
+	}
+}
+
+class LispSourceLocation {
+	let String source_name with get := "<string>";
+	let Number index with get := 0;
+	let Number line with get := 1;
+	let Number column with get := 1;
+
+	method to_String () {
+		return source_name _ ":" _ line _ ":" _ column;
+	}
+}
+
+class LispProgram {
+	let Array exprs with get := [];
+	let String source with get := "";
+	let String source_name with get := "<string>";
+	let Array source_map with get := [];
+
+	method __build__ () {
+		exprs := [] if exprs == null;
+		source_map := [] if source_map == null;
+	}
+
+	method location_for ( value ) {
+		for ( let entry in source_map ) {
+			return entry{location} if entry{value} == value;
+		}
+		return null;
+	}
+
+	method to_String () {
+		return "#<lisp-program " _ source_name _ ">";
+	}
+}
+
+class LispError extends Exception {
+	let location with get := null;
+	let Array stack with get := [];
+	let cause with get := null;
+}
+
+class LispSyntaxError extends LispError;
+class LispRuntimeError extends LispError;
+
+function sym ( String name ) {
+	if ( not _SYMBOLS.exists(name) ) {
+		_SYMBOLS.set( name, new LispSymbol( name: name ) );
+	}
+	return _SYMBOLS.get(name);
+}
+
+function is_symbol ( value ) {
+	return value instanceof LispSymbol;
+}
+
+function _is_ws ( ch ) {
+	return ch != null and ch ~ /\s/;
+}
+
+function _is_delim ( ch ) {
+	return ch == null or _is_ws(ch) or ch eq "(" or ch eq ")" or
+		ch eq "\"" or ch eq ";" or ch eq "'";
+}
+
+function _is_number_text ( text ) {
+	return text ~ /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+}
+
+function _atom ( text ) {
+	return true if text eq "#t";
+	return false if text eq "#f";
+	return text + 0 if _is_number_text(text);
+	return sym(text);
+}
+
+function _escaped_string ( String value ) {
+	let out := "";
+	let i := 0;
+	while ( i < length value ) {
+		let ch := substr( value, i, 1 );
+		if ( ch eq "\\" ) {
+			out _= "\\\\";
+		}
+		else if ( ch eq "\"" ) {
+			out _= "\\\"";
+		}
+		else if ( ch eq "\n" ) {
+			out _= "\\n";
+		}
+		else if ( ch eq "\t" ) {
+			out _= "\\t";
+		}
+		else if ( ch eq "\r" ) {
+			out _= "\\r";
+		}
+		else {
+			out _= ch;
+		}
+		i++;
+	}
+	return "\"" _ out _ "\"";
+}
+
+function _pair_string ( LispPair pair ) {
+	let parts := [];
+	let tail := pair;
+	while ( tail instanceof LispPair ) {
+		parts.push( _datum_string( tail.get_car() ) );
+		tail := tail.get_cdr();
+	}
+	if ( tail instanceof Array ) {
+		for ( let item in tail ) {
+			parts.push( _datum_string(item) );
+		}
+		return "(" _ join( " ", parts ) _ ")";
+	}
+	return "(" _ join( " ", parts ) _ " . " _ _datum_string(tail) _ ")";
+}
+
+function _datum_string ( value ) {
+	return "()" if value == null;
+	return "#t" if value == true;
+	return "#f" if value == false;
+	return _escaped_string(value) if typeof value == "String";
+	return value.get_name() if value instanceof LispSymbol;
+	return _pair_string(value) if value instanceof LispPair;
+	return value.to_String()
+		if value instanceof LispVector or value instanceof LispChar or
+			value instanceof LispByteVector or value instanceof LispEOF or
+			value instanceof LispSourceLocation or value instanceof LispProgram;
+	if ( value instanceof Array ) {
+		let parts := [];
+		for ( let item in value ) {
+			parts.push( _datum_string(item) );
+		}
+		return "(" _ join( " ", parts ) _ ")";
+	}
+	return "" _ value;
+}
+
+class SExprReader {
+	let String source := "";
+	let String source_name := "<string>";
+	let Number pos := 0;
+	let Number line := 1;
+	let Number column := 1;
+	let Array source_map with get := [];
+
+	method __build__ () {
+		source_map := [] if source_map == null;
+	}
+
+	method _peek () {
+		return null if pos >= length source;
+		return substr( source, pos, 1 );
+	}
+
+	method _peek_n ( Number offset ) {
+		return null if pos + offset >= length source;
+		return substr( source, pos + offset, 1 );
+	}
+
+	method _next () {
+		let ch := self._peek();
+		pos++;
+		if ( ch eq "\n" ) {
+			line++;
+			column := 1;
+		}
+		else {
+			column++;
+		}
+		return ch;
+	}
+
+	method _location ( Number index, Number at_line, Number at_column ) {
+		return new LispSourceLocation(
+			source_name: source_name,
+			index: index,
+			line: at_line,
+			column: at_column,
+		);
+	}
+
+	method _record ( value, Number index, Number at_line, Number at_column ) {
+		source_map.push({
+			value: value,
+			location: self._location( index, at_line, at_column ),
+		});
+		return value;
+	}
+
+	method _syntax_error ( String message, index?, at_line?, at_column? ) {
+		let error_index := index == null ? pos : index;
+		let error_line := at_line == null ? line : at_line;
+		let error_column := at_column == null ? column : at_column;
+		throw new LispSyntaxError(
+			message: message,
+			location: self._location( error_index, error_line, error_column ),
+		);
+	}
+
+	method _line_starts_with ( String prefix ) {
+		return substr( source, pos, length prefix ) eq prefix;
+	}
+
+	method _pod_command_delim ( ch ) {
+		return ch == null or _is_ws(ch);
+	}
+
+	method _starts_pod () {
+		return false unless column == 1 and self._peek() eq "=";
+		let ch := self._peek_n(1);
+		return ch != null and ch ~ /[A-Za-z]/;
+	}
+
+	method _skip_line () {
+		while ( self._peek() != null ) {
+			let ch := self._next();
+			last if ch eq "\n";
+		}
+	}
+
+	method _skip_pod () {
+		while ( self._peek() != null ) {
+			if ( column == 1 and self._line_starts_with("=cut") and
+				self._pod_command_delim( self._peek_n(4) )
+			) {
+				self._skip_line();
+				return;
+			}
+			self._skip_line();
+		}
+	}
+
+	method _skip_ws () {
+		while ( true ) {
+			let ch := self._peek();
+			if ( _is_ws(ch) ) {
+				self._next();
+				next;
+			}
+			if ( ch eq ";" ) {
+				while ( self._peek() != null and self._peek() ne "\n" ) {
+					self._next();
+				}
+				next;
+			}
+			if ( self._starts_pod() ) {
+				self._skip_pod();
+				next;
+			}
+			last;
+		}
+	}
+
+	method eof () {
+		self._skip_ws();
+		return self._peek() == null;
+	}
+
+	method read_all () {
+		let out := [];
+		while ( not self.eof() ) {
+			out.push( self.read_expr() );
+		}
+		return out;
+	}
+
+	method read_expr () {
+		self._skip_ws();
+		let start := pos;
+		let start_line := line;
+		let start_column := column;
+		let ch := self._peek();
+		self._syntax_error(
+			"Unexpected end of S-expression input",
+			start,
+			start_line,
+			start_column,
+		) if ch == null;
+
+		let out := null;
+		if ( ch eq "(" ) {
+			out := self._read_list();
+		}
+		else if ( ch eq "#" and self._peek_n(1) eq "\\" ) {
+			out := self._read_char();
+		}
+		else if ( ch eq "#" and self._peek_n(1) eq "u" and
+			self._peek_n(2) eq "8" and self._peek_n(3) eq "(" ) {
+			out := self._read_bytevector();
+		}
+		else if ( ch eq "#" and self._peek_n(1) eq "(" ) {
+			out := self._read_vector();
+		}
+		else if ( ch eq "\"" ) {
+			out := self._read_string();
+		}
+		else if ( ch eq "'" ) {
+			self._next();
+			out := [ sym("quote"), self.read_expr() ];
+		}
+		else if ( ch eq "`" ) {
+			self._next();
+			out := [ sym("quasiquote"), self.read_expr() ];
+		}
+		else if ( ch eq "," ) {
+			self._next();
+			if ( self._peek() eq "@" ) {
+				self._next();
+				out := [ sym("unquote-splicing"), self.read_expr() ];
+			}
+			else {
+				out := [ sym("unquote"), self.read_expr() ];
+			}
+		}
+		else if ( ch eq ")" ) {
+			self._syntax_error( "Unexpected ')'", start, start_line, start_column );
+		}
+		else {
+			out := self._read_atom();
+		}
+		return self._record( out, start, start_line, start_column );
+	}
+
+	method _read_string () {
+		self._next();
+		let out := "";
+		while ( true ) {
+			let ch := self._next();
+			self._syntax_error( "Unterminated string literal" ) if ch == null;
+			last if ch eq "\"";
+			if ( ch eq "\\" ) {
+				let esc := self._next();
+				self._syntax_error( "Unterminated string escape" ) if esc == null;
+				if ( esc eq "n" ) {
+					out _= "\n";
+				}
+				else if ( esc eq "t" ) {
+					out _= "\t";
+				}
+				else if ( esc eq "r" ) {
+					out _= "\r";
+				}
+				else {
+					out _= esc;
+				}
+			}
+			else {
+				out _= ch;
+			}
+		}
+		return out;
+	}
+
+	method _read_char () {
+		self._next();
+		self._next();
+		let text := "";
+		while ( not _is_delim(self._peek()) ) {
+			text _= self._next();
+		}
+		self._syntax_error("Expected character literal") if text eq "";
+		return new LispChar( value: " " ) if text eq "space";
+		return new LispChar( value: "\n" ) if text eq "newline";
+		return new LispChar( value: "\t" ) if text eq "tab";
+		return new LispChar( value: text ) if length text == 1;
+		self._syntax_error( "Unknown character name: " _ text );
+	}
+
+	method _read_atom () {
+		let out := "";
+		while ( not _is_delim(self._peek()) ) {
+			out _= self._next();
+		}
+		self._syntax_error("Expected atom") if out eq "";
+		return _atom(out);
+	}
+
+	method _read_list () {
+		self._next();
+		let values := [];
+		while ( true ) {
+			self._skip_ws();
+			let ch := self._peek();
+			self._syntax_error("Unterminated list") if ch == null;
+			if ( ch eq ")" ) {
+				self._next();
+				return values;
+			}
+			if ( ch eq "." and _is_delim( self._peek_n(1) ) ) {
+				self._next();
+				let tail := self.read_expr();
+				self._skip_ws();
+				self._syntax_error("Expected ')' after dotted pair")
+					unless self._peek() eq ")";
+				self._next();
+				return self._dotted(values, tail);
+			}
+			values.push( self.read_expr() );
+		}
+	}
+
+	method _read_vector () {
+		self._next();
+		self._next();
+		let values := [];
+		while ( true ) {
+			self._skip_ws();
+			let ch := self._peek();
+			self._syntax_error("Unterminated vector") if ch == null;
+			if ( ch eq ")" ) {
+				self._next();
+				return new LispVector( values: values );
+			}
+			values.push( self.read_expr() );
+		}
+	}
+
+	method _read_bytevector () {
+		self._next();
+		self._next();
+		self._next();
+		self._next();
+		let values := [];
+		while ( true ) {
+			self._skip_ws();
+			let ch := self._peek();
+			self._syntax_error("Unterminated bytevector") if ch == null;
+			if ( ch eq ")" ) {
+				self._next();
+				return new LispByteVector( values: values );
+			}
+			let value := self.read_expr();
+			self._syntax_error("Bytevector values must be exact bytes")
+				unless typeof value == "Number" and value >= 0 and
+					value <= 255 and value == int(value);
+			values.push(value);
+		}
+	}
+
+	method _dotted ( Array values, tail ) {
+		self._syntax_error("Dotted pair needs a head value")
+			if values.length() == 0;
+		let out := tail;
+		let i := values.length() - 1;
+		while ( i >= 0 ) {
+			out := new LispPair( car: values[i], cdr: out );
+			i--;
+		}
+		return out;
+	}
+}
+
+function parse_sexprs ( String text ) {
+	return ( new SExprReader( source: text ) ).read_all();
+}
+
+function parse_program ( String text, source_name? ) {
+	let actual_source_name := source_name == null ? "<string>" : source_name;
+	let reader := new SExprReader(
+		source: text,
+		source_name: actual_source_name,
+	);
+	let exprs := reader.read_all();
+	return new LispProgram(
+		exprs: exprs,
+		source: text,
+		source_name: actual_source_name,
+		source_map: reader.get_source_map(),
+	);
+}
+
+function parse_sexpr ( String text ) {
+	let program := parse_program(text);
+	throw new LispSyntaxError( message: "Expected one S-expression" )
+		if program.get_exprs().length() != 1;
+	return program.get_exprs()[0];
+}
+
+function load_sexprs ( Path path ) {
+	return parse_sexprs( path.slurp_utf8() );
+}
+
+function load_program ( Path path ) {
+	return parse_program( path.slurp_utf8(), path.to_String() );
+}
