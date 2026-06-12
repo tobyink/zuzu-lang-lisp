@@ -644,7 +644,7 @@ class LispStackFrame {
 			frame_location != null
 				? frame_location.to_String() _ ": "
 				: ""
-		) _ ( frame_name != null ? "" _ frame_name : "<expr>" );
+		) _ ( frame_name ?: "<expr>" );
 	}
 }
 
