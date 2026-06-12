@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.4
 
 - Format Lisp runtime diagnostics without relying on inherited exception
   fields, preserving source locations and stack frames across runtimes.

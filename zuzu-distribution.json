@@ -1,6 +1,6 @@
 {
 	"name": "lang-lisp",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"author": "Toby Inkster",
 	"repo": "https://github.com/tobyink/zuzu-lang-lisp",
 	"license": "Artistic-1.0 OR GPL-2.0-or-later",
