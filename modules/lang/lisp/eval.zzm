@@ -638,8 +638,13 @@ class LispStackFrame {
 	let location with get := null;
 
 	method to_String () {
-		return ( location != null ? location.to_String() _ ": " : "" ) _
-			( name != null ? "" _ name : "<expr>" );
+		let frame_location := self.get_location();
+		let frame_name := self.get_name();
+		return (
+			frame_location != null
+				? frame_location.to_String() _ ": "
+				: ""
+		) _ ( frame_name != null ? "" _ frame_name : "<expr>" );
 	}
 }
 
@@ -876,11 +881,25 @@ function _copy_stack ( env ) {
 	return out;
 }
 
+function _format_lisp_error_message ( String message, location, stack ) {
+	let lines := [
+		location != null
+			? "" _ location _ ": error: " _ message
+			: message,
+	];
+	if ( stack != null ) {
+		for ( let frame in stack ) {
+			lines.push( "  at " _ frame.to_String() );
+		}
+	}
+	return join( "\n", lines );
+}
+
 function _runtime_exception ( String message, expr?, env? ) {
 	let location := ( expr != null and env != null ) ? _location_for( expr, env ) : null;
 	let stack := env != null ? _copy_stack(env) : [];
 	throw new LispRuntimeError(
-		message: message,
+		message: _format_lisp_error_message( message, location, stack ),
 		location: location,
 		stack: stack,
 	);
@@ -888,20 +907,14 @@ function _runtime_exception ( String message, expr?, env? ) {
 
 function _wrap_runtime_error ( Exception e, expr, env ) {
 	if ( e instanceof LispRuntimeError ) {
-		if ( e.get_location() != null ) {
-			return e;
-		}
-		return new LispRuntimeError(
-			message: e{message},
-			location: _location_for( expr, env ),
-			stack: _copy_stack(env),
-			cause: e,
-		);
+		return e;
 	}
+	let location := _location_for( expr, env );
+	let stack := _copy_stack(env);
 	return new LispRuntimeError(
-		message: e{message},
-		location: _location_for( expr, env ),
-		stack: _copy_stack(env),
+		message: _format_lisp_error_message( e{message}, location, stack ),
+		location: location,
+		stack: stack,
 		cause: e,
 	);
 }
@@ -2528,21 +2541,11 @@ function standard_env ( options? ) {
 }
 
 function lisp_error_message ( error ) {
-	let message := error{message};
-	let location := error instanceof LispRuntimeError ? error.get_location() : null;
-	if ( error instanceof LispRuntimeError and location != null ) {
-		return "" _ location _ ": error: " _ message;
-	}
-	return "" _ message;
+	return "" _ error{message};
 }
 
 function lisp_error_report ( error ) {
 	let lines := [ lisp_error_message(error) ];
-	if ( error instanceof LispRuntimeError ) {
-		for ( let frame in error.get_stack() ) {
-			lines.push( "  at " _ frame.to_String() );
-		}
-	}
 	return join( "\n", lines );
 }
 

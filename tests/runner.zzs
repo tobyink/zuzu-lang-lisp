@@ -7,6 +7,10 @@ if ( not Env.get( "AUTHOR_TESTING", false ) ) {
 	Proc.exit(0);
 }
 
+if ( not __system__.get( "deny_js", true ) ) {
+	skip_all("nested zuzu-js Proc.run does not pass child arguments");
+}
+
 let env := {
 	PATH: Env.get( "PATH", "" ),
 	ZUZULIB: "modules",

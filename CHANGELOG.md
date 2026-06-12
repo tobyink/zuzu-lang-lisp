@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Format Lisp runtime diagnostics without relying on inherited exception
+  fields, preserving source locations and stack frames across runtimes.
+- Skip nested `zuzu-js` command-runner checks where child arguments are not
+  propagated by `Proc.run`.
+
 ## 0.0.3
 
 - Mark distribution stable.
